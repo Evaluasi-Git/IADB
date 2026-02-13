@@ -6,7 +6,7 @@ This repository contains code and documentation for a multi-country **mystery-sh
 - **Fintech** platforms (e.g., Wise / Revolut)  
 - **Cryptocurrency** exchanges (e.g., Coinbase / Binance)
 
-## Study at a glance (PAP v0.6)
+## Study at a glance 
 - **Sample:** 15 trained confederates in 10 countries  
 - **Volume:** 40 cross-border transactions per confederate (**N = 600**) over a 12-week period  
 - **Treatments (randomized schedule):** channel × amount × delivery method  
