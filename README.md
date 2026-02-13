@@ -21,6 +21,7 @@ For each transaction, confederates document:
 4. **Transaction time**
 
 ## Repository layout
+```
 ├── code/
 │ ├── 01_randomization/ # schedule generation + balance checks
 │ ├── 02_operations/ # payment tracking, reminders, QC utilities
@@ -36,7 +37,7 @@ For each transaction, confederates document:
 │ ├── codebook/ # variable definitions + coding rules
 │ └── templates/ # transaction logs / field-note templates
 └── README.md
-
+```
 
 ## Getting started
 ### Requirements
