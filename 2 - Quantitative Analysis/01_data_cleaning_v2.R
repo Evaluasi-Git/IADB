@@ -1,10 +1,10 @@
 # ==============================================================================
-# IADB - Raw SurveyCTO data cleaning --------------------------------------------
+# IADB - Raw SurveyCTO data cleaning -------------------------------------------
 # Author: Cedric Antunes (Evaluasi)
 # Date: May 11, 2026
 # Objectives:
-#   1. Clean raw SurveyCTO WIDE export
-#   2. Construct treatment variables and SurveyCTO-derived outcomes
+#   1. Clean raw SurveyCTO data
+#   2. Construct treatment variables and outcomes
 #   3. Preserve local-currency cost variables without pretending they are USD
 #   4. Create transaction_uid = confederate_id + transaction_id
 #   5. Create diagnostics and quality flags
@@ -23,22 +23,27 @@ suppressPackageStartupMessages({
   library(janitor)
   library(readr)
   library(stringr)
+  library(here)
 })
 
 # ------------------------------------------------------------------------------
-# Local paths ------------------------------------------------------------------
+# Paths ------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
-# Input directory
-raw_path <- "D:/Users/cedric/Downloads/IADB_Survey_WIDE_apr23.csv"
+# Input
+raw_path <- here("IADB_Survey_WIDE_may16.csv")
 
-# Output directory
-output_dir <- "D:/Users/cedric/Downloads/IADB_clean_outputs"
-dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+# Output
+output_dir <- here("data", "clean")
+
+# Create local directory (uncomment if not needed)
+#dir.create(output_dir, 
+#           showWarnings = FALSE, 
+#           recursive = TRUE)
 
 # ------------------------------------------------------------------------------
-# Loading raw SurveyCTO data ---------------------------------------------------
+# Loading raw SurveyCTO data --------------------------------------------------- 
 # ------------------------------------------------------------------------------
-raw <- read_csv(
+raw_data <- read_csv(
   raw_path,
   show_col_types = FALSE,
   col_types = cols(.default = col_character())
@@ -48,7 +53,7 @@ raw <- read_csv(
 # ------------------------------------------------------------------------------
 # Helpers ----------------------------------------------------------------------
 # ------------------------------------------------------------------------------
-# Adding missing cols as NA if needed
+# Missing cols, if needed
 add_missing_cols <- function(data, cols) {
   missing_cols <- setdiff(cols, names(data))
   if (length(missing_cols) > 0) {
@@ -57,7 +62,7 @@ add_missing_cols <- function(data, cols) {
   data
 }
 
-# Cleaning strings/reading all numeric as character
+# Text cleaning
 clean_text <- function(x) {
   x <- as.character(x)
   x <- str_squish(x)
@@ -65,7 +70,7 @@ clean_text <- function(x) {
   str_to_lower(x)
 }
 
-# Safely reading yes/no questions
+# Safe yes/no
 to_yesno <- function(x) {
   x <- clean_text(x)
   case_when(
@@ -75,7 +80,7 @@ to_yesno <- function(x) {
   )
 }
 
-
+# Safe nummeric parsing
 parse_one_number <- function(z) {
   z <- as.character(z)
   z <- str_squish(z)
@@ -131,7 +136,7 @@ to_num <- function(x) {
   map_dbl(x, parse_one_number)
 }
 
-# Safely reading dates
+# Safe date 
 safe_ymd_hms <- function(x) {
   x <- as.character(x)
   x <- str_squish(x)
@@ -153,7 +158,7 @@ safe_date <- function(x) {
   as_date(safe_ymd_hms(x))
 }
 
-# Safely reading multiple options
+# Safe options
 has_select_option <- function(data, base, option) {
   wide_col <- paste0(base, "_", option)
   
@@ -185,6 +190,7 @@ has_select_option <- function(data, base, option) {
   rep(NA_real_, nrow(data))
 }
 
+# Safe rescale for KYC
 rescale_0_5_to_0_3 <- function(x) {
   x <- to_num(x)
   case_when(
@@ -272,26 +278,26 @@ expected_cols <- c(
   "g2_cost_compare", "g2_lowest_cost"
 )
 
-raw <- raw |>
+raw_data <- raw_data |>
   add_missing_cols(expected_cols)
 
 # ------------------------------------------------------------------------------
-# Precomputing select_multiple indicators --------------------------------------
+# Preprocessing select_multiple indicators -------------------------------------
 # ------------------------------------------------------------------------------
-raw <- raw |>
+raw_data <- raw_data |>
   mutate(
-    doc_req_govid_sel       = has_select_option(raw, "documents_required", "0"),
-    doc_req_address_sel     = has_select_option(raw, "documents_required", "1"),
-    doc_req_add_id_sel      = has_select_option(raw, "documents_required", "2"),
-    doc_req_biometrics_sel  = has_select_option(raw, "documents_required", "3"),
-    doc_req_taxid_sel       = has_select_option(raw, "documents_required", "4"),
-    doc_req_employment_sel  = has_select_option(raw, "documents_required", "5"),
-    doc_req_sourcefunds_sel = has_select_option(raw, "documents_required", "6"),
-    doc_req_other_sel       = has_select_option(raw, "documents_required", "7"),
-    doc_req_none_sel        = has_select_option(raw, "documents_required", "8"),
+    doc_req_govid_sel       = has_select_option(raw_data, "documents_required", "0"),
+    doc_req_address_sel     = has_select_option(raw_data, "documents_required", "1"),
+    doc_req_add_id_sel      = has_select_option(raw_data, "documents_required", "2"),
+    doc_req_biometrics_sel  = has_select_option(raw_data, "documents_required", "3"),
+    doc_req_taxid_sel       = has_select_option(raw_data, "documents_required", "4"),
+    doc_req_employment_sel  = has_select_option(raw_data, "documents_required", "5"),
+    doc_req_sourcefunds_sel = has_select_option(raw_data, "documents_required", "6"),
+    doc_req_other_sel       = has_select_option(raw_data, "documents_required", "7"),
+    doc_req_none_sel        = has_select_option(raw_data, "documents_required", "8"),
     
     cost_additional_none_sel =
-      has_select_option(raw, "cost_additional_fees", "none")
+      has_select_option(raw_data, "cost_additional_fees", "none")
   )
 
 # ------------------------------------------------------------------------------
@@ -317,13 +323,14 @@ min_wage_lookup <- tribble(
 # ------------------------------------------------------------------------------
 # Main cleaning pipeline -------------------------------------------------------
 # ------------------------------------------------------------------------------
-df_clean <- raw |>
+
+df_clean <- raw_data |>
   mutate(
     # --------------------------------------------------------------------------
     # Consent and metadata
     # --------------------------------------------------------------------------
     consent_num = to_yesno(consent),
-    # Safely reading dates
+    
     submission_datetime = safe_ymd_hms(submission_date),
     start_datetime      = safe_ymd_hms(starttime),
     end_datetime        = safe_ymd_hms(endtime),
@@ -381,7 +388,7 @@ df_clean <- raw |>
     beneficiary_country_raw = clean_text(beneficiary_country),
     
     # --------------------------------------------------------------------------
-    # Confederate identifier and transaction unique identifier (UID)
+    # Confederate identifier and transaction UID
     # --------------------------------------------------------------------------
     confederate_id = case_when(
       !is.na(confederate_id) & confederate_id != "" ~ as.character(confederate_id),
@@ -451,6 +458,15 @@ df_clean <- raw |>
     # --------------------------------------------------------------------------
     # KYC score
     # --------------------------------------------------------------------------
+    # KYC 0-3 hierarchy:
+    # 0 = no KYC/documentation observed
+    # 1 = basic government ID requested
+    # 2 = enhanced identity/address documentation requested
+    # 3 = high-stringency verification: biometrics, source-of-funds documentation,
+    #     or source-of-funds questioning.
+    #
+    # This mirrors the deployed SurveyCTO hidden kyc_score_0_3 calculation.
+    # kyc_score_reported is primary; kyc_score_constructed is fallback only.
     kyc_score_reported_raw = to_num(kyc_score_0_3),
     
     kyc_score_reported = case_when(
@@ -527,7 +543,7 @@ df_clean <- raw |>
     
     kyc_score = coalesce(kyc_score_reported, kyc_score_constructed),
     
-    # Richer 0-5 measures
+    # Richer 0-5 KYC/procedure measures
     kyc_document_stringency_0_5 = to_num(stringency_documents_request),
     kyc_id_exam_0_5             = to_num(b1_id_exam_score),
     kyc_address_check_0_5       = to_num(b3_address_check_score),
@@ -547,7 +563,30 @@ df_clean <- raw |>
     kyc_score_overall_rescaled_0_3 =
       rescale_0_5_to_0_3(i4_overall_compliance),
     
-    kyc_score_composite_0_5 = rowMeans(
+    # Composite KYC score:
+    # computed only if at least 5 component scores are non-missing.
+    kyc_component_n = rowSums(
+      across(c(
+        kyc_document_stringency_0_5,
+        kyc_id_exam_0_5,
+        kyc_address_check_0_5,
+        kyc_info_collection_0_5,
+        kyc_form_thoroughness_0_5,
+        kyc_purpose_probe_0_5,
+        kyc_source_probe_0_5,
+        kyc_documentation_0_5,
+        kyc_risk_suspicion_0_5,
+        kyc_recordkeeping_0_5,
+        kyc_culture_0_5,
+        kyc_online_security_0_5,
+        kyc_staff_professionalism_0_5,
+        kyc_staff_training_0_5,
+        kyc_overall_0_5
+      ), ~ !is.na(.x)),
+      na.rm = TRUE
+    ),
+    
+    kyc_score_composite_0_5_raw = rowMeans(
       across(c(
         kyc_document_stringency_0_5,
         kyc_id_exam_0_5,
@@ -568,10 +607,15 @@ df_clean <- raw |>
       na.rm = TRUE
     ),
     
-    kyc_score_composite_0_5 = ifelse(
-      is.nan(kyc_score_composite_0_5),
+    kyc_score_composite_0_5_raw = ifelse(
+      is.nan(kyc_score_composite_0_5_raw),
       NA_real_,
-      kyc_score_composite_0_5
+      kyc_score_composite_0_5_raw
+    ),
+    
+    kyc_score_composite_0_5 = case_when(
+      kyc_component_n >= 5 ~ kyc_score_composite_0_5_raw,
+      TRUE ~ NA_real_
     ),
     
     kyc_score_composite_0_3 = case_when(
@@ -886,7 +930,6 @@ df_clean <- raw |>
 # ------------------------------------------------------------------------------
 # Final SurveyCTO-cleaned dataframe --------------------------------------------
 # ------------------------------------------------------------------------------
-
 analysis_df <- df_clean |>
   select(
     any_of(c(
@@ -947,6 +990,8 @@ analysis_df <- df_clean |>
       "kyc_score_overall_rescaled_0_3",
       "kyc_score_composite_0_3",
       "kyc_score_composite_0_5",
+      "kyc_score_composite_0_5_raw",
+      "kyc_component_n",
       "documents_required",
       "documents_required_other",
       "identity_document_comments",
@@ -1041,6 +1086,7 @@ analysis_df <- df_clean |>
       # Outcome details and notes
       "j1a_reject_reasons",
       "j1b_incomplete_reasons",
+      "j2_confirmed_received_num",
       "j_comments",
       "k1_field_notes",
       "k2_red_flags",
@@ -1068,7 +1114,20 @@ analysis_df <- df_clean |>
   )
 
 # ------------------------------------------------------------------------------
-# Sanity checks ----------------------------------------------------------------
+# Basic assertions -------------------------------------------------------------
+# ------------------------------------------------------------------------------
+stopifnot(all(analysis_df$amount[!is.na(analysis_df$amount)] %in% c(100, 250)))
+stopifnot(all(analysis_df$institution_type_num[!is.na(analysis_df$institution_type_num)] %in% 0:3))
+stopifnot(all(analysis_df$transaction_method_num[!is.na(analysis_df$transaction_method_num)] %in% 0:1))
+stopifnot(all(analysis_df$transaction_outcome_num[!is.na(analysis_df$transaction_outcome_num)] %in% 0:3))
+stopifnot(all(analysis_df$kyc_score[!is.na(analysis_df$kyc_score)] %in% 0:3))
+
+if (any(analysis_df$flag_duplicate_transaction_uid, na.rm = TRUE)) {
+  warning("Duplicate transaction_uid detected. Review diagnostics$duplicate_transaction_uids.")
+}
+
+# ------------------------------------------------------------------------------
+# Diagnostics/sanity checks ----------------------------------------------------
 # ------------------------------------------------------------------------------
 diagnostics <- list(
   n_rows = tibble(n_rows = nrow(analysis_df)),
@@ -1204,8 +1263,9 @@ diagnostics <- list(
 )
 
 # ------------------------------------------------------------------------------
-# Diagnostics ------------------------------------------------------------------
+# 12. Print diagnostics ---------------------------------------------------------
 # ------------------------------------------------------------------------------
+
 cat("\n=== IADB SurveyCTO cleaning complete ===\n")
 cat("Rows:", nrow(analysis_df), "\n")
 cat("Confederates:", n_distinct(analysis_df$confederate_id, na.rm = TRUE), "\n\n")
@@ -1229,46 +1289,39 @@ cat("\n=== Balance by channel ===\n")
 print(diagnostics$balance_by_channel)
 
 # ------------------------------------------------------------------------------
-# Saving outputs for analysis --------------------------------------------------
+# Saving outputs ---------------------------------------------------------------
 # ------------------------------------------------------------------------------
-# Analysis data ----------------------------------------------------------------
 write_csv(
   analysis_df,
-  file.path(output_dir, "IADB_surveycto_clean_apr23.csv")
+  file.path(output_dir, "IADB_surveycto_clean_may16.csv")
 )
 
 saveRDS(
   analysis_df,
-  file.path(output_dir, "IADB_surveycto_clean_apr23.rds")
+  file.path(output_dir, "IADB_surveycto_clean_may16.rds")
 )
 
-# Diagnostics dataframes -------------------------------------------------------
 saveRDS(
   diagnostics,
-  file.path(output_dir, "IADB_surveycto_clean_diagnostics_apr23.rds")
+  file.path(output_dir, "IADB_surveycto_clean_diagnostics_may16.rds")
 )
 
 write_csv(
   diagnostics$balance_by_channel,
-  file.path(output_dir, "IADB_surveycto_balance_by_channel_apr23.csv")
+  file.path(output_dir, "IADB_surveycto_balance_by_channel_may16.csv")
 )
 
-write_csv(
-  diagnostics$missing_by_channel,
-  file.path(output_dir, "IADB_surveycto_missing_by_channel_apr23.csv")
-)
+#write_csv(
+#  diagnostics$missing_by_channel,
+#  file.path(output_dir, "IADB_surveycto_missing_by_channel_may16.csv")
+#)
 
-write_csv(
-  diagnostics$quality_flags,
-  file.path(output_dir, "IADB_surveycto_quality_flags_apr23.csv")
-)
+#write_csv(
+#  diagnostics$quality_flags,
+#  file.path(output_dir, "IADB_surveycto_quality_flags_may16.csv")
+#)
 
-write_csv(
-  diagnostics$kyc_validation,
-  file.path(output_dir, "IADB_surveycto_kyc_validation_apr23.csv")
-)
-
-write_csv(
-  diagnostics$unmatched_countries_for_wage,
-  file.path(output_dir, "IADB_surveycto_unmatched_wage_countries_apr23.csv")
-)
+#write_csv(
+#  diagnostics$kyc_validation,
+#  file.path(output_dir, "IADB_surveycto_kyc_validation_may16.csv")
+#)
