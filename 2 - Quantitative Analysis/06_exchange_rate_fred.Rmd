@@ -1,0 +1,582 @@
+---
+title: "IADB FX Rates Diagnostics"
+author: "Cedric Antunes / Evaluasi"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  pdf_document:
+    toc: true
+    number_sections: true
+    fig_caption: true
+fontsize: 10pt
+geometry: margin=0.65in
+params:
+  manual_dir: "data/manual"
+  figures_dir: "figures/fx"
+  fx_file: "IADB_fx_rates_daily.csv"
+  diagnostics_file: "IADB_fx_rates_daily_diagnostics.csv"
+  source_counts_file: "IADB_fx_rates_daily_source_counts.csv"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = "center",
+  fig.width = 7.2,
+  fig.height = 5.0,
+  out.width = "\\linewidth",
+  dpi = 300
+)
+
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(lubridate)
+  library(janitor)
+  library(readr)
+  library(scales)
+  library(knitr)
+  library(here)
+})
+
+manual_dir <- here(params$manual_dir)
+figures_dir <- here(params$figures_dir)
+
+dir.create(figures_dir, showWarnings = FALSE, recursive = TRUE)
+
+fx_path <- file.path(manual_dir, params$fx_file)
+diagnostics_path <- file.path(manual_dir, params$diagnostics_file)
+source_counts_path <- file.path(manual_dir, params$source_counts_file)
+
+stopifnot(file.exists(fx_path))
+
+options(knitr.kable.NA = "")
+
+print_compact_table <- function(data, caption = NULL, digits = 2, font_size = "\\scriptsize") {
+  if (knitr::is_latex_output()) {
+    cat(font_size, "\n")
+  }
+
+  table_out <- knitr::kable(
+    data,
+    digits = digits,
+    caption = caption,
+    booktabs = FALSE
+  )
+
+  cat(table_out, sep = "\n")
+
+  if (knitr::is_latex_output()) {
+    cat("\n\\normalsize\n")
+  }
+}
+```
+
+# Purpose
+
+This document reports diagnostics for the daily exchange-rate table used in the IADB SAP cost analysis.
+
+The FX table is expected to contain daily exchange rates in the following direction:
+
+```text
+fx_rate_local_per_usd = local currency units per 1 USD
+```
+
+For example, if `BRL = 5.20`, then one US dollar equals 5.20 Brazilian reais.
+
+The output of this document is diagnostic only. It checks coverage, missingness, source composition, and the plausibility of exchange-rate trends before the FX table is used in the cost and time-cost analysis.
+
+# Load FX data
+
+```{r load-fx}
+fx_daily <- read_csv(
+  fx_path,
+  show_col_types = FALSE
+) |>
+  clean_names() |>
+  mutate(
+    currency = str_to_upper(str_squish(currency)),
+    fx_date = as.Date(fx_date),
+    fx_rate_local_per_usd = as.numeric(fx_rate_local_per_usd),
+    fx_source = as.character(fx_source)
+  ) |>
+  arrange(currency, fx_date)
+
+fx_diagnostics_from_file <- if (file.exists(diagnostics_path)) {
+  read_csv(diagnostics_path, show_col_types = FALSE) |>
+    clean_names()
+} else {
+  NULL
+}
+
+fx_source_counts_from_file <- if (file.exists(source_counts_path)) {
+  read_csv(source_counts_path, show_col_types = FALSE) |>
+    clean_names()
+} else {
+  NULL
+}
+
+glimpse(fx_daily)
+```
+
+# Coverage diagnostics
+
+```{r coverage-diagnostics, results='asis'}
+fx_diagnostics <- fx_daily |>
+  group_by(currency) |>
+  summarise(
+    first_date = min(fx_date, na.rm = TRUE),
+    last_date = max(fx_date, na.rm = TRUE),
+    n_days = n(),
+    first_rate = first(fx_rate_local_per_usd),
+    last_rate = last(fx_rate_local_per_usd),
+    min_rate = suppressWarnings(min(fx_rate_local_per_usd, na.rm = TRUE)),
+    max_rate = suppressWarnings(max(fx_rate_local_per_usd, na.rm = TRUE)),
+    missing_rates = sum(is.na(fx_rate_local_per_usd)),
+    n_sources = n_distinct(fx_source, na.rm = TRUE),
+    sources = paste(sort(unique(na.omit(fx_source))), collapse = "; "),
+    .groups = "drop"
+  ) |>
+  mutate(
+    min_rate = ifelse(is.infinite(min_rate), NA_real_, min_rate),
+    max_rate = ifelse(is.infinite(max_rate), NA_real_, max_rate),
+    pct_change_window = 100 * (last_rate / first_rate - 1),
+    sources_short = case_when(
+      str_detect(sources, "USD_identity") ~ "USD identity",
+      str_detect(sources, "FRED") ~ "FRED",
+      str_detect(sources, "fawazahmed0") ~ "Public FX API",
+      TRUE ~ str_trunc(sources, 32)
+    )
+  )
+
+fx_diagnostics |>
+  arrange(currency) |>
+  transmute(
+    Curr = currency,
+    Start = first_date,
+    End = last_date,
+    Days = n_days,
+    First = round(first_rate, 3),
+    Last = round(last_rate, 3),
+    Missing = missing_rates,
+    Change = round(pct_change_window, 2),
+    Source = sources_short
+  ) |>
+  print_compact_table(
+    caption = "FX Coverage and Rate Diagnostics",
+    digits = 3,
+    font_size = "\\scriptsize"
+  )
+```
+
+```{r safety-checks, results='asis'}
+n_total_rows <- nrow(fx_daily)
+n_currencies <- n_distinct(fx_daily$currency)
+n_missing_rates <- sum(is.na(fx_daily$fx_rate_local_per_usd))
+n_nonpositive_rates <- sum(fx_daily$fx_rate_local_per_usd <= 0, na.rm = TRUE)
+
+safety_summary <- tibble(
+  Item = c(
+    "Total FX rows",
+    "Currencies",
+    "Missing rates",
+    "Non-positive rates",
+    "First FX date",
+    "Last FX date"
+  ),
+  Value = c(
+    as.character(n_total_rows),
+    as.character(n_currencies),
+    as.character(n_missing_rates),
+    as.character(n_nonpositive_rates),
+    as.character(min(fx_daily$fx_date, na.rm = TRUE)),
+    as.character(max(fx_daily$fx_date, na.rm = TRUE))
+  )
+)
+
+safety_summary |>
+  print_compact_table(
+    caption = "FX Safety Summary",
+    digits = 2,
+    font_size = "\\small"
+  )
+
+stopifnot(n_missing_rates == 0)
+stopifnot(n_nonpositive_rates == 0)
+```
+
+# FX source diagnostics
+
+```{r source-diagnostics, results='asis'}
+fx_source_counts <- fx_daily |>
+  count(currency, fx_source, name = "n_days") |>
+  group_by(currency) |>
+  mutate(
+    pct_days = 100 * n_days / sum(n_days),
+    fx_source_short = case_when(
+      str_detect(fx_source, "USD_identity") ~ "USD identity",
+      str_detect(fx_source, "FRED") ~ "FRED",
+      str_detect(fx_source, "fawazahmed0") ~ "Public FX API",
+      TRUE ~ str_trunc(fx_source, 32)
+    )
+  ) |>
+  ungroup() |>
+  arrange(currency, desc(n_days))
+
+fx_source_counts |>
+  transmute(
+    Curr = currency,
+    Source = fx_source_short,
+    Days = n_days,
+    Pct = round(pct_days, 1)
+  ) |>
+  print_compact_table(
+    caption = "FX Source Coverage by Currency",
+    digits = 1,
+    font_size = "\\scriptsize"
+  )
+```
+
+```{r source-plot, fig.width=7.2, fig.height=4.8, out.width="\\linewidth"}
+p_source <- fx_source_counts |>
+  ggplot(aes(
+    x = reorder(currency, n_days),
+    y = n_days,
+    fill = fx_source_short
+  )) +
+  geom_col(width = 0.75) +
+  coord_flip() +
+  labs(
+    title = "FX Source Coverage by Currency",
+    x = NULL,
+    y = "Number of currency-days",
+    fill = "FX source",
+    caption = "Note: Counts show the number of currency-days supplied by each FX source in the final daily FX table."
+  ) +
+  theme_bw(base_size = 10) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 11),
+    legend.position = "bottom",
+    legend.text = element_text(size = 7),
+    legend.title = element_text(size = 8),
+    plot.caption = element_text(size = 7)
+  )
+
+p_source
+
+ggsave(
+  filename = file.path(figures_dir, "fx_source_coverage_by_currency.png"),
+  plot = p_source,
+  width = 10,
+  height = 5,
+  dpi = 300
+)
+```
+
+# Daily exchange-rate levels
+
+```{r rate-levels-plot, fig.width=7.2, fig.height=8.5, out.width="\\linewidth"}
+p_levels <- fx_daily |>
+  ggplot(aes(
+    x = fx_date,
+    y = fx_rate_local_per_usd,
+    group = currency
+  )) +
+  geom_line(linewidth = 0.55) +
+  facet_wrap(~ currency, scales = "free_y", ncol = 2) +
+  scale_x_date(date_breaks = "2 weeks", date_labels = "%b %d") +
+  labs(
+    title = "Daily Exchange Rates to the US Dollar",
+    subtitle = "Local currency units per 1 USD",
+    x = NULL,
+    y = "Local currency per USD",
+    caption = "Note: Higher values indicate local-currency depreciation relative to the US dollar."
+  ) +
+  theme_bw(base_size = 9) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 11),
+    plot.subtitle = element_text(hjust = 0.5, size = 9),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 6),
+    axis.text.y = element_text(size = 7),
+    axis.title = element_text(size = 8),
+    strip.text = element_text(face = "bold", size = 8),
+    plot.caption = element_text(size = 7)
+  )
+
+p_levels
+
+ggsave(
+  filename = file.path(figures_dir, "fx_daily_exchange_rate_levels.png"),
+  plot = p_levels,
+  width = 10,
+  height = 8.5,
+  dpi = 300
+)
+```
+
+# Indexed exchange-rate movement
+
+This plot indexes each currency to 100 on its first observed date. Values above 100 indicate depreciation against the US dollar relative to the beginning of the FX window; values below 100 indicate appreciation.
+
+```{r indexed-rates, fig.width=7.2, fig.height=8.5, out.width="\\linewidth"}
+fx_indexed <- fx_daily |>
+  group_by(currency) |>
+  arrange(fx_date, .by_group = TRUE) |>
+  mutate(
+    first_rate_currency = first(fx_rate_local_per_usd),
+    fx_index_100 = 100 * fx_rate_local_per_usd / first_rate_currency
+  ) |>
+  ungroup()
+
+p_index <- fx_indexed |>
+  filter(currency != "USD") |>
+  ggplot(aes(
+    x = fx_date,
+    y = fx_index_100,
+    group = currency
+  )) +
+  geom_hline(yintercept = 100, linetype = "dashed", linewidth = 0.35) +
+  geom_line(linewidth = 0.6) +
+  facet_wrap(~ currency, scales = "free_y", ncol = 2) +
+  scale_x_date(date_breaks = "2 weeks", date_labels = "%b %d") +
+  labs(
+    title = "Indexed Exchange-Rate Movement",
+    subtitle = "First available date = 100",
+    x = NULL,
+    y = "Index",
+    caption = "Note: Values above 100 indicate depreciation relative to the first date in the FX table."
+  ) +
+  theme_bw(base_size = 9) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 11),
+    plot.subtitle = element_text(hjust = 0.5, size = 9),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 6),
+    axis.text.y = element_text(size = 7),
+    axis.title = element_text(size = 8),
+    strip.text = element_text(face = "bold", size = 8),
+    plot.caption = element_text(size = 7)
+  )
+
+p_index
+
+ggsave(
+  filename = file.path(figures_dir, "fx_indexed_exchange_rate_movement.png"),
+  plot = p_index,
+  width = 10,
+  height = 8.5,
+  dpi = 300
+)
+```
+
+# Percent change over the FX window
+
+```{r pct-change-plot, fig.width=7.2, fig.height=5.2, out.width="\\linewidth", results='asis'}
+pct_change_table <- fx_indexed |>
+  group_by(currency) |>
+  summarise(
+    first_date = first(fx_date),
+    last_date = last(fx_date),
+    first_rate = first(fx_rate_local_per_usd),
+    last_rate = last(fx_rate_local_per_usd),
+    pct_change = 100 * (last_rate / first_rate - 1),
+    .groups = "drop"
+  ) |>
+  arrange(desc(pct_change))
+
+pct_change_table |>
+  transmute(
+    Curr = currency,
+    Start = first_date,
+    End = last_date,
+    First = round(first_rate, 3),
+    Last = round(last_rate, 3),
+    Change = round(pct_change, 2)
+  ) |>
+  print_compact_table(
+    caption = "Percent Change in Local Currency per USD over the FX Window",
+    digits = 2,
+    font_size = "\\scriptsize"
+  )
+
+p_pct_change <- pct_change_table |>
+  filter(currency != "USD") |>
+  ggplot(aes(
+    x = reorder(currency, pct_change),
+    y = pct_change
+  )) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.35) +
+  geom_col(width = 0.75) +
+  coord_flip() +
+  scale_y_continuous(labels = label_percent(scale = 1)) +
+  labs(
+    title = "Exchange-Rate Change over the FX Window",
+    subtitle = "Percent change in local currency per 1 USD",
+    x = NULL,
+    y = "Percent change",
+    caption = "Note: Positive values indicate depreciation against the US dollar; negative values indicate appreciation."
+  ) +
+  theme_bw(base_size = 10) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 11),
+    plot.subtitle = element_text(hjust = 0.5, size = 9),
+    axis.text = element_text(size = 8),
+    axis.title = element_text(size = 8),
+    plot.caption = element_text(size = 7)
+  )
+
+p_pct_change
+
+ggsave(
+  filename = file.path(figures_dir, "fx_percent_change_window.png"),
+  plot = p_pct_change,
+  width = 9,
+  height = 5,
+  dpi = 300
+)
+```
+
+# Combined comparison plot
+
+```{r combined-comparison, fig.width=7.2, fig.height=5.5, out.width="\\linewidth"}
+p_combined <- fx_indexed |>
+  filter(currency != "USD") |>
+  ggplot(aes(
+    x = fx_date,
+    y = fx_index_100,
+    group = currency,
+    linetype = currency
+  )) +
+  geom_hline(yintercept = 100, linetype = "dashed", linewidth = 0.35) +
+  geom_line(linewidth = 0.6) +
+  scale_x_date(date_breaks = "2 weeks", date_labels = "%b %d") +
+  labs(
+    title = "Indexed FX Movement across IADB Countries",
+    subtitle = "First available date = 100",
+    x = NULL,
+    y = "Exchange-rate index",
+    linetype = "Currency",
+    caption = "Note: Higher values indicate local-currency depreciation relative to the US dollar."
+  ) +
+  theme_bw(base_size = 10) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 11),
+    plot.subtitle = element_text(hjust = 0.5, size = 9),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
+    axis.text.y = element_text(size = 8),
+    axis.title = element_text(size = 8),
+    legend.position = "bottom",
+    legend.text = element_text(size = 7),
+    legend.title = element_text(size = 8),
+    legend.key.width = grid::unit(0.8, "cm"),
+    plot.caption = element_text(size = 7)
+  )
+
+p_combined
+
+ggsave(
+  filename = file.path(figures_dir, "fx_indexed_combined_comparison.png"),
+  plot = p_combined,
+  width = 10,
+  height = 6,
+  dpi = 300
+)
+```
+
+# Missingness heatmap
+
+```{r missingness-heatmap, fig.width=7.2, fig.height=4.8, out.width="\\linewidth"}
+fx_missing_grid <- fx_daily |>
+  mutate(
+    missing_rate = is.na(fx_rate_local_per_usd)
+  )
+
+p_missing <- fx_missing_grid |>
+  ggplot(aes(
+    x = fx_date,
+    y = currency,
+    fill = missing_rate
+  )) +
+  geom_tile() +
+  scale_x_date(date_breaks = "2 weeks", date_labels = "%b %d") +
+  scale_fill_manual(
+    values = c("FALSE" = "grey80", "TRUE" = "black"),
+    labels = c("Available", "Missing")
+  ) +
+  labs(
+    title = "FX Rate Availability by Currency-Date",
+    x = NULL,
+    y = NULL,
+    fill = "Status",
+    caption = "Note: The expected final FX table should have no missing currency-date cells."
+  ) +
+  theme_bw(base_size = 10) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 11),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
+    axis.text.y = element_text(size = 8),
+    legend.position = "bottom",
+    legend.text = element_text(size = 7),
+    legend.title = element_text(size = 8),
+    plot.caption = element_text(size = 7)
+  )
+
+p_missing
+
+ggsave(
+  filename = file.path(figures_dir, "fx_missingness_heatmap.png"),
+  plot = p_missing,
+  width = 10,
+  height = 5,
+  dpi = 300
+)
+```
+
+# Final validation
+
+```{r final-validation, results='asis'}
+validation_summary <- tibble(
+  Check = c(
+    "No missing FX rates",
+    "No non-positive FX rates",
+    "All currencies have same number of dates",
+    "USD is always equal to 1"
+  ),
+  Passed = c(
+    sum(is.na(fx_daily$fx_rate_local_per_usd)) == 0,
+    sum(fx_daily$fx_rate_local_per_usd <= 0, na.rm = TRUE) == 0,
+    fx_daily |> count(currency) |> pull(n) |> n_distinct() == 1,
+    fx_daily |>
+      filter(currency == "USD") |>
+      summarise(ok = all(fx_rate_local_per_usd == 1, na.rm = TRUE)) |>
+      pull(ok)
+  )
+)
+
+validation_summary |>
+  print_compact_table(
+    caption = "Final FX Validation Checks",
+    digits = 2,
+    font_size = "\\small"
+  )
+
+if (!all(validation_summary$Passed)) {
+  stop("At least one FX validation check failed. Review the diagnostics before running Script 06.")
+}
+```
+
+# Notes for SAP cost analysis
+
+The resulting FX file can be used by `06_cost_fx_and_time_outcomes.R`.
+
+Recommended interpretation:
+
+- `fx_rate_local_per_usd` is local currency per one US dollar.
+- Local costs are converted to USD as:
+
+```text
+cost_usd = cost_local / fx_rate_local_per_usd
+```
+
+- Dollarized countries use `USD = 1`.
+- The `fx_source` field should be retained for auditability.
+- For client-facing reporting, public API fallback rates should be transparently documented and, where possible, spot-checked against official or client-approved sources.
