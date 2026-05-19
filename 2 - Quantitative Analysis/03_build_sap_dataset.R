@@ -61,10 +61,10 @@ output_dir <- here(
   "sap_dataset_builder"
 )
 
-# Create output directory (uncomment if needed)
-#dir.create(output_dir, 
-#           showWarnings = FALSE, 
-#           recursive = TRUE)
+# Create output directory 
+dir.create(output_dir, 
+           showWarnings = FALSE, 
+           recursive = TRUE)
 
 # First-pass mode:
 #   TRUE  = accept high/medium matches automatically and exclude ambiguous rows.
@@ -567,10 +567,10 @@ schedule_checks <- payment_schedule |>
 cat("\n=== Schedule checks ===\n")
 print(schedule_checks)
 
-#write_csv(
-#  schedule_checks,
-#  file.path(output_dir, "IADB_03_schedule_checks.csv")
-#)
+write_csv(
+  schedule_checks,
+  file.path(output_dir, "IADB_03_schedule_checks.csv")
+)
 
 stopifnot(schedule_checks$n_schedule_slots == schedule_checks$n_unique_schedule_slots)
 stopifnot(schedule_checks$missing_schedule_slot_id == 0)
@@ -779,10 +779,10 @@ best_matches <- candidate_top |>
     )
   )
 
-#write_csv(
-#  best_matches,
-#  file.path(output_dir, "IADB_03_best_schedule_matches.csv")
-#)
+write_csv(
+  best_matches,
+  file.path(output_dir, "IADB_03_best_schedule_matches.csv")
+)
 
 # ------------------------------------------------------------------------------
 # Manual review file -----------------------------------------------------------
@@ -1233,15 +1233,15 @@ survey_excluded <- survey_matched |>
 unmatched_survey_rows <- survey_matched |>
   filter(!matched_to_schedule | is.na(best_schedule_slot_id))
 
-#write_csv(
-#  survey_excluded,
-#  file.path(output_dir, "IADB_03_survey_rows_excluded_from_sap_firstpass.csv")
-#)
+write_csv(
+  survey_excluded,
+  file.path(output_dir, "IADB_03_survey_rows_excluded_from_sap_firstpass.csv")
+)
 
-#write_csv(
-#  unmatched_survey_rows,
-#  file.path(output_dir, "IADB_03_unmatched_survey_rows.csv")
-#)
+write_csv(
+  unmatched_survey_rows,
+  file.path(output_dir, "IADB_03_unmatched_survey_rows.csv")
+)
 
 # ------------------------------------------------------------------------------
 # Building schedule-level SAP denominator --------------------------------------
@@ -1463,10 +1463,10 @@ sap_merge_checks <- sap_base |>
 cat("\n=== SAP merge checks ===\n")
 print(sap_merge_checks)
 
-#write_csv(
-#  sap_merge_checks,
-#  file.path(output_dir, "IADB_03_sap_merge_checks.csv")
-#)
+write_csv(
+  sap_merge_checks,
+  file.path(output_dir, "IADB_03_sap_merge_checks.csv")
+)
 
 # ------------------------------------------------------------------------------
 # Output diagnostics: non-attempts and protocol deviations ---------------------
@@ -1505,15 +1505,15 @@ protocol_deviations <- sap_base |>
     data_quality_flag
   )
 
-#write_csv(
-#  non_attempts,
-#  file.path(output_dir, "IADB_03_non_attempted_schedule_slots.csv")
-#)
+write_csv(
+  non_attempts,
+  file.path(output_dir, "IADB_03_non_attempted_schedule_slots.csv")
+)
 
-#write_csv(
-#  protocol_deviations,
-#  file.path(output_dir, "IADB_03_protocol_deviations.csv")
-#)
+write_csv(
+  protocol_deviations,
+  file.path(output_dir, "IADB_03_protocol_deviations.csv")
+)
 
 # ------------------------------------------------------------------------------
 # Bad / incomplete survey completion review ------------------------------------
