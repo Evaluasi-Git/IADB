@@ -1,7 +1,9 @@
 # Quantitative Analysis
 This folder contains the core R pipeline for the IADB KYC/AML audit study. The scripts clean raw SurveyCTO data, merge SurveyCTO submissions to randomized transaction schedules and payment-tracking records, construct SAP analysis samples, build FX-adjusted cost outcomes, estimate the pre-specified SAP models, and export final tables and implementation/attrition diagnostics.
+
 The pipeline should be run from the project root so that `here::here()` resolves paths correctly.
-Script sequence
+
+## Script sequence
 Run the scripts in the order below.
 ```r
 source("01_data_cleaning_v2.R")
@@ -19,7 +21,7 @@ source("07_cost_time_sap_models.R")
 source("08_generate_final_results.R")
 source("09_attrition.R")
 ```
-Main folders
+## Main folders
 Expected project structure:
 ```text
 Quantitative Analysis/
@@ -42,6 +44,7 @@ Quantitative Analysis/
 ```
 The exact raw-data location can be changed at the top of each script. Current scripts use `here::here()` whenever possible so that paths are portable across machines.
 Required R packages
+
 The scripts use:
 ```r
 install.packages(c(
@@ -62,21 +65,21 @@ install.packages(c(
 ```r
 Sys.setenv(FRED_API_KEY = "your_key_here")
 ```
-Pipeline overview
-01_data_cleaning_v2.R
+# Pipeline overview
+`01_data_cleaning_v2.R`
 Cleans the raw SurveyCTO wide file and constructs transaction-level variables.
-Main input:
+**Main input:**
 ```text
 IADB_Survey_WIDE_may16.csv
 ```
-Main outputs:
+**Main outputs:**
 ```text
 data/clean/IADB_surveycto_clean_may16.csv
 data/clean/IADB_surveycto_clean_may16.rds
 data/clean/IADB_surveycto_clean_diagnostics_may16.rds
 data/clean/IADB_surveycto_balance_by_channel_may16.csv
 ```
-Key outputs include:
+**Key outputs include:**
 `success`: binary transaction completion outcome.
 `kyc_score`: primary 0–3 KYC outcome, using the SurveyCTO hidden score when available and constructed fallback otherwise.
 `kyc_score_composite_0_5`: richer 0–5 KYC/procedure composite, constructed only when at least five component scores are observed.
@@ -84,14 +87,15 @@ Key outputs include:
 `transaction_duration_hours`: SurveyCTO exact-minute duration (`i1_exact_minutes / 60`), not the PAP settlement-time outcome.
 `interaction_time_hours`: active interaction burden, equal to `(travel + waiting + service time) / 60`.
 `cost_local` and `total_cost_without_time_local`: local-currency cost outcomes, not yet converted to USD.
-02_enriched_payment_schedule.R
+
+`02_enriched_payment_schedule.R`
 Builds an enriched schedule by stacking randomized schedules and matching them to the internal payment-tracking schedule.
-Main inputs:
+**Main inputs:**
 ```text
 data/raw/[IADB] - Internal Payment Tracking - Payment Schedule.csv
 IADB/data/randomization/master_schedule_*.csv
 ```
-Main output:
+**Main output:**
 ```text
 data/clean/sap_dataset_builder/IADB_payment_schedule_enriched_with_randomization.csv
 ```
