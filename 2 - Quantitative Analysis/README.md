@@ -90,11 +90,13 @@ data/clean/IADB_surveycto_balance_by_channel_may16.csv
 
 `02_enriched_payment_schedule.R`
 Builds an enriched schedule by stacking randomized schedules and matching them to the internal payment-tracking schedule.
+
 **Main inputs:**
 ```text
 data/raw/[IADB] - Internal Payment Tracking - Payment Schedule.csv
 IADB/data/randomization/master_schedule_*.csv
 ```
+
 **Main output:**
 ```text
 data/clean/sap_dataset_builder/IADB_payment_schedule_enriched_with_randomization.csv
@@ -103,11 +105,13 @@ This file recovers assigned treatment conditions for each transaction slot: chan
 
 `03_build_sap_dataset.R`
 Builds the first schedule-level SAP dataset by merging cleaned SurveyCTO submissions with the enriched randomized/payment schedule.
+
 **Main inputs:**
 ```text
 data/clean/IADB_surveycto_clean_may16.csv
 data/clean/sap_dataset_builder/IADB_payment_schedule_enriched_with_randomization.csv
 ```
+
 **Main outputs:**
 ```text
 data/clean/sap_dataset_builder/IADB_sap_schedule_level_base.csv
@@ -122,12 +126,14 @@ This script creates the schedule-level denominator and a conservative first-pass
 
 `04_build_analysis_sample_and_attrition.R`
 Builds the maximal automated observed sample and attrition diagnostics.
+
 **Main inputs:**
 ```text
 data/clean/sap_dataset_builder/IADB_03_surveycto_schedule_matched_full_audit.csv
 data/clean/sap_dataset_builder/IADB_sap_schedule_level_base.rds
 data/clean/sap_dataset_builder/IADB_sap_observed_first_pass.rds
 ```
+
 **Main outputs:**
 ```text
 data/clean/sap_dataset_builder/IADB_sap_schedule_level_base_maximal_auto.csv
@@ -154,12 +160,14 @@ These files support manual review. They should not be used to overwrite the SAP 
 
 `05_run_sap_models.R`
 Runs first-pass SAP models for transaction success and KYC burden.
+
 **Main inputs:**
 ```text
 data/clean/sap_dataset_builder/IADB_sap_observed_maximal_auto.rds
 data/clean/sap_dataset_builder/IADB_sap_per_protocol_maximal_auto.rds
 data/clean/sap_dataset_builder/IADB_sap_observed_first_pass.rds
 ```
+
 **Main outputs:**
 ```text
 data/clean/sap_dataset_builder/sap_results_maximal_auto/sap_success_kyc_main_and_sensitivity.txt
@@ -179,6 +187,7 @@ Banks + lower transaction amount + in-person delivery
 ```
 ``06_exchange_rates_fred.R``
 Builds the daily FX-rate table used to convert local-currency cost outcomes to USD.
+
 **Main outputs:**
 ```text
 data/manual/IADB_fx_rates_daily.csv
@@ -192,6 +201,7 @@ This means units of local currency per 1 USD. For example, `BRL = 5.20` means 1 
 
 `07_cost_time_sap_models.R`
 Builds USD cost outcomes, constructs time/cost samples, and estimates cost/time SAP models.
+
 **Main inputs:**
 ```text
 data/clean/sap_dataset_builder/IADB_sap_observed_maximal_auto.rds
@@ -207,10 +217,12 @@ data/clean/sap_dataset_builder/IADB_sap_per_protocol_maximal_auto_cost_time.rds
 data/clean/sap_dataset_builder/IADB_sap_observed_conservative_cost_time.rds
 data/clean/sap_dataset_builder/sap_results_cost_fx_time/
 ```
+
 **Main monetary outcome:**
 ```text
 total_cost_without_time_usd
 ```
+
 **Main time outcomes:**
 - `settlement_time_hours`: PAP-aligned settlement time, built from `time_hours` in the cleaned SurveyCTO data.
 - `interaction_time_hours`: active burden measure, equal to travel + waiting + service time, in hours.
@@ -218,10 +230,12 @@ total_cost_without_time_usd
 
 `08_generate_final_results.R`
 Loads final analysis datasets and exports final `fixest::etable` outputs for success, KYC, cost, settlement time, interaction time, and reported exact duration. Those tables are for internal purposes only.
+
 **Main outputs:**
 ```text
 data/clean/sap_dataset_builder/final_etables/
 ```
+
 **Outcome table groups:**
 ```text
 IADB_08_success_models.*
@@ -234,8 +248,10 @@ IADB_08_interaction_time_models.*
 IADB_08_reported_exact_duration_models.*
 IADB_08_all_models.*
 ```
+
 `09_attrition.R`
 Runs implementation and attrition checks using the schedule-level denominator rather than only observed SurveyCTO submissions.
+
 **Main outputs:**
 ```text
 data/clean/sap_dataset_builder/implementation_checks/
