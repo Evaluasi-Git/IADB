@@ -80,13 +80,13 @@ data/clean/IADB_surveycto_clean_diagnostics_may16.rds
 data/clean/IADB_surveycto_balance_by_channel_may16.csv
 ```
 **Key outputs include:**
-`success`: binary transaction completion outcome.
-`kyc_score`: primary 0–3 KYC outcome, using the SurveyCTO hidden score when available and constructed fallback otherwise.
-`kyc_score_composite_0_5`: richer 0–5 KYC/procedure composite, constructed only when at least five component scores are observed.
-`time_hours`: PAP-aligned transaction settlement time, defined for successful transactions only.
-`transaction_duration_hours`: SurveyCTO exact-minute duration (`i1_exact_minutes / 60`), not the PAP settlement-time outcome.
-`interaction_time_hours`: active interaction burden, equal to `(travel + waiting + service time) / 60`.
-`cost_local` and `total_cost_without_time_local`: local-currency cost outcomes, not yet converted to USD.
+- `success`: binary transaction completion outcome.
+- `kyc_score`: primary 0–3 KYC outcome, using the SurveyCTO hidden score when available and constructed fallback otherwise.
+- `kyc_score_composite_0_5`: richer 0–5 KYC/procedure composite, constructed only when at least five component scores are observed.
+- `time_hours`: PAP-aligned transaction settlement time, defined for successful transactions only.
+- `transaction_duration_hours`: SurveyCTO exact-minute duration (`i1_exact_minutes / 60`), not the PAP settlement-time outcome.
+- `interaction_time_hours`: active interaction burden, equal to `(travel + waiting + service time) / 60`.
+- `cost_local` and `total_cost_without_time_local`: local-currency cost outcomes, not yet converted to USD.
 
 `02_enriched_payment_schedule.R`
 Builds an enriched schedule by stacking randomized schedules and matching them to the internal payment-tracking schedule.
