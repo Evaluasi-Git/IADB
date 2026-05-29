@@ -1,4 +1,4 @@
-Quantitative Analysis
+# Quantitative Analysis
 This folder contains the core R pipeline for the IADB KYC/AML audit study. The scripts clean raw SurveyCTO data, merge SurveyCTO submissions to randomized transaction schedules and payment-tracking records, construct SAP analysis samples, build FX-adjusted cost outcomes, estimate the pre-specified SAP models, and export final tables and implementation/attrition diagnostics.
 The pipeline should be run from the project root so that `here::here()` resolves paths correctly.
 Script sequence
