@@ -100,14 +100,15 @@ IADB/data/randomization/master_schedule_*.csv
 data/clean/sap_dataset_builder/IADB_payment_schedule_enriched_with_randomization.csv
 ```
 This file recovers assigned treatment conditions for each transaction slot: channel, amount, delivery mode, assigned date, transaction order, and payment-tracking status.
-03_build_sap_dataset.R
+
+`03_build_sap_dataset.R`
 Builds the first schedule-level SAP dataset by merging cleaned SurveyCTO submissions with the enriched randomized/payment schedule.
-Main inputs:
+**Main inputs:**
 ```text
 data/clean/IADB_surveycto_clean_may16.csv
 data/clean/sap_dataset_builder/IADB_payment_schedule_enriched_with_randomization.csv
 ```
-Main outputs:
+**Main outputs:**
 ```text
 data/clean/sap_dataset_builder/IADB_sap_schedule_level_base.csv
 data/clean/sap_dataset_builder/IADB_sap_schedule_level_base.rds
@@ -118,15 +119,16 @@ data/clean/sap_dataset_builder/IADB_manual_schedule_match_review_to_complete.csv
 data/clean/sap_dataset_builder/IADB_bad_survey_completion_review.csv
 ```
 This script creates the schedule-level denominator and a conservative first-pass observed sample. It also exports manual-review files for ambiguous matches, duplicate IDs, and bad completions.
-04_build_analysis_sample_and_attrition.R
+
+`04_build_analysis_sample_and_attrition.R`
 Builds the maximal automated observed sample and attrition diagnostics.
-Main inputs:
+**Main inputs:**
 ```text
 data/clean/sap_dataset_builder/IADB_03_surveycto_schedule_matched_full_audit.csv
 data/clean/sap_dataset_builder/IADB_sap_schedule_level_base.rds
 data/clean/sap_dataset_builder/IADB_sap_observed_first_pass.rds
 ```
-Main outputs:
+**Main outputs:**
 ```text
 data/clean/sap_dataset_builder/IADB_sap_schedule_level_base_maximal_auto.csv
 data/clean/sap_dataset_builder/IADB_sap_schedule_level_base_maximal_auto.rds
@@ -136,27 +138,29 @@ data/clean/sap_dataset_builder/IADB_sap_per_protocol_maximal_auto.csv
 data/clean/sap_dataset_builder/IADB_sap_per_protocol_maximal_auto.rds
 ```
 This script defines the core observed samples used in the SAP models:
-`main`: maximal automated SAP analysis sample.
-`clean`: main sample excluding observations flagged for final manual review.
-`per_protocol`: matched observations consistent with assigned protocol.
-`conservative`: conservative first-pass matched sample from Script 03.
-04b_duplicate_slot_recovery_audit.R and 04c_prepare_recovery_review.R
+- `main`: maximal automated SAP analysis sample.
+- `clean`: main sample excluding observations flagged for final manual review.
+- `per_protocol`: matched observations consistent with assigned protocol.
+- `conservative`: conservative first-pass matched sample from Script 03.
+
+`04b_duplicate_slot_recovery_audit.R` and `04c_prepare_recovery_review.R`
 Optional QA scripts for duplicate-slot recovery. These scripts are not required for every run. Use them when the matching audit suggests that some SurveyCTO rows may have been assigned to duplicate slots or could be recovered into unused schedule slots.
-Typical outputs include:
+**Outputs include:**
 ```text
 data/clean/sap_dataset_builder/IADB_04b_top_recovery_candidates.csv
 data/clean/sap_dataset_builder/IADB_04c_recovery_review_template.csv
 ```
 These files support manual review. They should not be used to overwrite the SAP sample without a documented decision trail.
-05_run_sap_models.R
+
+`05_run_sap_models.R`
 Runs first-pass SAP models for transaction success and KYC burden.
-Main inputs:
+**Main inputs:**
 ```text
 data/clean/sap_dataset_builder/IADB_sap_observed_maximal_auto.rds
 data/clean/sap_dataset_builder/IADB_sap_per_protocol_maximal_auto.rds
 data/clean/sap_dataset_builder/IADB_sap_observed_first_pass.rds
 ```
-Main outputs:
+**Main outputs:**
 ```text
 data/clean/sap_dataset_builder/sap_results_maximal_auto/sap_success_kyc_main_and_sensitivity.txt
 data/clean/sap_dataset_builder/sap_results_maximal_auto/sap_success_kyc_main_and_sensitivity.tex
@@ -173,9 +177,9 @@ The omitted category is:
 ```text
 Banks + lower transaction amount + in-person delivery
 ```
-06_exchange_rates_fred.R
+``06_exchange_rates_fred.R``
 Builds the daily FX-rate table used to convert local-currency cost outcomes to USD.
-Main outputs:
+**Main outputs:**
 ```text
 data/manual/IADB_fx_rates_daily.csv
 data/manual/IADB_fx_rates_daily_diagnostics.csv
@@ -185,16 +189,17 @@ The key FX variable is:
 fx_rate_local_per_usd
 ```
 This means units of local currency per 1 USD. For example, `BRL = 5.20` means 1 USD = 5.20 Brazilian reais.
-07_cost_time_sap_models.R
+
+`07_cost_time_sap_models.R`
 Builds USD cost outcomes, constructs time/cost samples, and estimates cost/time SAP models.
-Main inputs:
+**Main inputs:**
 ```text
 data/clean/sap_dataset_builder/IADB_sap_observed_maximal_auto.rds
 data/clean/sap_dataset_builder/IADB_sap_per_protocol_maximal_auto.rds
 data/clean/sap_dataset_builder/IADB_sap_observed_first_pass.rds
 data/manual/IADB_fx_rates_daily.csv
 ```
-Main outputs:
+**Main outputs:**
 ```text
 data/clean/sap_dataset_builder/IADB_sap_observed_maximal_auto_cost_time.rds
 data/clean/sap_dataset_builder/IADB_sap_observed_clean_cost_time.rds
@@ -202,21 +207,22 @@ data/clean/sap_dataset_builder/IADB_sap_per_protocol_maximal_auto_cost_time.rds
 data/clean/sap_dataset_builder/IADB_sap_observed_conservative_cost_time.rds
 data/clean/sap_dataset_builder/sap_results_cost_fx_time/
 ```
-Main monetary outcome:
+**Main monetary outcome:**
 ```text
 total_cost_without_time_usd
 ```
-Main time outcomes:
-`settlement_time_hours`: PAP-aligned settlement time, built from `time_hours` in the cleaned SurveyCTO data.
-`interaction_time_hours`: active burden measure, equal to travel + waiting + service time, in hours.
-`transaction_duration_hours`: SurveyCTO exact-minute duration, based on `i1_exact_minutes / 60`. This is useful as a secondary reported-duration measure but should not be described as the PAP settlement-time outcome.
-08_generate_final_results.R
-Loads final analysis datasets and exports final `fixest::etable` outputs for success, KYC, cost, settlement time, interaction time, and reported exact duration.
-Main outputs:
+**Main time outcomes:**
+- `settlement_time_hours`: PAP-aligned settlement time, built from `time_hours` in the cleaned SurveyCTO data.
+- `interaction_time_hours`: active burden measure, equal to travel + waiting + service time, in hours.
+- `transaction_duration_hours`: SurveyCTO exact-minute duration, based on `i1_exact_minutes / 60`. This is useful as a secondary reported-duration measure but should not be described as the PAP settlement-time outcome.
+
+`08_generate_final_results.R`
+Loads final analysis datasets and exports final `fixest::etable` outputs for success, KYC, cost, settlement time, interaction time, and reported exact duration. Those tables are for internal purposes only.
+**Main outputs:**
 ```text
 data/clean/sap_dataset_builder/final_etables/
 ```
-Expected table groups:
+**Outcome table groups:**
 ```text
 IADB_08_success_models.*
 IADB_08_kyc_models.*
@@ -228,49 +234,56 @@ IADB_08_interaction_time_models.*
 IADB_08_reported_exact_duration_models.*
 IADB_08_all_models.*
 ```
-09_attrition.R
+`09_attrition.R`
 Runs implementation and attrition checks using the schedule-level denominator rather than only observed SurveyCTO submissions.
-Main outputs:
+**Main outputs:**
 ```text
 data/clean/sap_dataset_builder/implementation_checks/
 ```
 This script checks whether assigned channel, amount, or delivery mode predicts:
-being attempted;
-being funded but not attempted;
-being skipped/not attempted;
-unconditional success counting funded-not-attempted cases as failures;
-protocol deviation among attempted transactions.
-Outcome definitions
-Transaction success
+- being attempted;
+- being funded but not attempted;
+- being skipped/not attempted;
+- unconditional success counting funded-not-attempted cases as failures;
+- protocol deviation among attempted transactions.
+- Outcome definitions
+
+# Main Outcomes
+## Transaction success
 `success = 1` if the transaction was completed. Rejected, incomplete, and abandoned transactions are coded as `success = 0`.
-KYC burden
+
+## KYC burden
 The primary KYC outcome is `kyc_score`, a 0–3 measure:
 `0`: no KYC/documentation observed;
 `1`: basic government ID requested;
 `2`: enhanced identity/address documentation requested;
 `3`: high-stringency verification, including biometrics, source-of-funds documentation, or source-of-funds questioning.
 The richer 0–5 composite is `kyc_score_composite_0_5`. It averages observed procedural components only when at least five components are non-missing.
-Cost
+
+## Transaction cost
 Cost variables are kept in local currency in Script 01. USD conversion happens only after FX-rate construction in Scripts 06 and 07.
 The preferred cost outcome is:
 ```text
 total_cost_without_time_usd
 ```
 This excludes time costs. Time costs are calculated separately and should not be mechanically added to monetary costs unless explicitly described as a combined burden measure.
-Time
+
+# Time
 There are three distinct time outcomes:
-`settlement_time_hours` / `time_hours`: PAP-aligned settlement time. This is the time from transaction initiation to receipt/settlement confirmation and is defined only for successful transactions.
-`interaction_time_hours`: active interaction burden. This sums travel, waiting, and service time and converts minutes to hours.
-`transaction_duration_hours`: SurveyCTO exact-minute reported duration. This comes from `i1_exact_minutes / 60` and captures the respondent's exact-minute answer to the “entire transaction” duration question, if known.
+- `settlement_time_hours` / `time_hours`: PAP-aligned settlement time. This is the time from transaction initiation to receipt/settlement confirmation and is defined only for successful transactions.
+- `interaction_time_hours`: active interaction burden. This sums travel, waiting, and service time and converts minutes to hours.
+- `transaction_duration_hours`: SurveyCTO exact-minute reported duration. This comes from `i1_exact_minutes / 60` and captures the respondent's exact-minute answer to the “entire transaction” duration question, if known.
 Do not describe `transaction_duration_hours` as the PAP settlement-time outcome. The PAP-aligned time outcome is `time_hours` in the cleaning script and `settlement_time_hours` in the cost/time model scripts.
-Samples used in model tables
+
+# Samples
 The final model tables use four sample definitions:
-`main`: maximal automated matched SAP analysis sample.
-`clean`: main sample excluding observations flagged as requiring final manual review.
-`per_protocol`: matched observations consistent with assigned protocol and excluding protocol deviations.
-`conservative`: conservative first-pass matched sample before broader automated recovery/inclusion rules.
+- `main`: maximal automated matched SAP analysis sample.
+- `clean`: main sample excluding observations flagged as requiring final manual review.
+- `per_protocol`: matched observations consistent with assigned protocol and excluding protocol deviations.
+- `conservative`: conservative first-pass matched sample before broader automated recovery/inclusion rules.
 Sample sizes differ across outcome families because cost and time outcomes are only observed for subsets of transactions.
-Model specification
+
+# Model specifications
 All main SAP models use the same additive treatment specification:
 ```text
 Y_ij = beta_1 MTO_ij + beta_2 Fintech_ij + beta_3 Crypto_ij
@@ -283,14 +296,12 @@ The omitted category is:
 Banks + lower transaction amount + in-person delivery
 ```
 The `Online` coefficient is an adjusted online-versus-in-person contrast, controlling for assigned channel, assigned amount, and confederate fixed effects. Because the model does not include channel-by-delivery interactions, it imposes a common online effect across channels and amounts.
-Reproducibility notes
-Run scripts from the project root.
-Do not change filenames in `data/clean/sap_dataset_builder/` unless downstream scripts are updated accordingly.
-Keep raw SurveyCTO exports, payment-tracking files, and manual-review templates out of public repositories if they contain sensitive information.
-Check diagnostics after each script before proceeding to the next script.
-If manual-review decisions are made, archive the decision file and document the criteria used.
-Recommended reporting language for time outcomes
-Use language like:
-> We distinguish three time outcomes. The PAP-aligned settlement-time outcome measures elapsed time from transaction initiation to receipt or settlement confirmation and is defined only for successful transactions. The interaction-time outcome captures active user burden by summing travel, waiting, and service time. The reported exact-duration outcome is based on the SurveyCTO exact-minute question about the entire transaction and is reported as a secondary descriptive time measure.
-Key revision note
-The cleaning script already constructs the PAP-aligned settlement-time outcome correctly as `time_hours`. The main downstream revision is naming: model scripts should not label `time_hours` as “reported time.” In the revised model scripts, `time_hours` is renamed to `settlement_time_hours` for analysis and final tables. The SurveyCTO exact-minute variable remains `transaction_duration_hours` and should be interpreted as a secondary reported-duration outcome.
+
+TBD: Cedric is now working on heterogenous effects.
+
+# Replication notes
+1. Run scripts from the project root.
+2. Do not change filenames in `data/clean/sap_dataset_builder/` unless downstream scripts are updated accordingly.
+3. Keep raw SurveyCTO exports, payment-tracking files, and manual-review templates out of public repositories if they contain sensitive information.
+4. Check diagnostics after each script before proceeding to the next script.
+4. If manual-review decisions are made, archive the decision file and document the criteria used.
