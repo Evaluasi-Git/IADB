@@ -3,7 +3,7 @@ This folder contains the core R pipeline for the IADB KYC/AML audit study. The s
 
 The pipeline should be run from the project root so that `here::here()` resolves paths correctly.
 
-Reference sheet of required inputs for all scripts [here]([https://www.example.com](https://docs.google.com/document/d/12rZm5D1ehirqKgC0H-VjnGBVI0SOFCW43aPwVMPy7S4/edit?usp=sharing)).
+Reference sheet of required inputs for all scripts [here]([https://www.example.com](https://docs.google.com/document/d/12rZm5D1ehirqKgC0H-VjnGBVI0SOFCW43aPwVMPy7S4/edit?usp=sharing).
 
 ## Script sequence
 Run the scripts in the order below.
