@@ -2,6 +2,7 @@
 # IADB - Build Enriched Payment/Randomization Schedule -------------------------
 # Author: Cedric Antunes (Evaluasi)
 # Date: May 11, 2026
+# Most recent data added on June 1st
 # Purpose:
 #   1. Load individual randomized transaction schedules;
 #   2. Stack and standardize them;
@@ -38,23 +39,25 @@ suppressPackageStartupMessages({
 payment_tracking_path <- here(
   "data",
   "raw",
-  "[IADB] - Internal Payment Tracking - Payment Schedule.csv"
+  "[IADB] - Internal Payment Tracking - Payment Schedule_june1.csv"
 )
 
 # Output
 output_dir <- here("data", "clean", "sap_dataset_builder")
 
-# Create outcome directory (uncomment if needed)
-#dir.create(output_dir, 
-#           showWarnings = FALSE, 
-#           recursive = TRUE)
+Create outcome directory (uncomment if needed)
+dir.create(output_dir, 
+           showWarnings = FALSE, 
+           recursive = TRUE)
 
 randomized_schedule_files <- c(
   here("IADB", "data", "randomization", "master_schedule_feb13.csv"),
   here("IADB", "data", "randomization", "master_schedule_feb26.csv"),
   here("IADB", "data", "randomization", "master_schedule_mar12.csv"),
   here("IADB", "data", "randomization", "master_schedule_mar30_may15.csv"),
-  here("IADB", "data", "randomization", "master_schedule_apr24_may25.csv")
+  here("IADB", "data", "randomization", "master_schedule_apr24_may25.csv"),
+  here("IADB", "data", "randomization", "supplemental_may21_may31", "master_schedule_supplemental_may21_may31.csv"),
+  here("IADB", "data", "randomization", "supplemental_may22_may31", "master_schedule_supplemental_may22_may31.csv")
 )
 
 # ------------------------------------------------------------------------------
