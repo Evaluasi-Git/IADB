@@ -2,6 +2,7 @@
 # IADB - Raw SurveyCTO data cleaning -------------------------------------------
 # Author: Cedric Antunes (Evaluasi)
 # Date: May 11, 2026
+# Minor revisions implemented on June 1st
 # Objectives:
 #   1. Clean raw SurveyCTO data
 #   2. Construct treatment variables and outcomes
@@ -30,15 +31,15 @@ suppressPackageStartupMessages({
 # Paths ------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
 # Input
-raw_path <- here("IADB_Survey_WIDE_may16.csv")
+raw_path <- here("IADB_Survey_WIDE_june1.csv")
 
 # Output
 output_dir <- here("data", "clean")
 
 # Create local directory (uncomment if not needed)
-#dir.create(output_dir, 
-#           showWarnings = FALSE, 
-#           recursive = TRUE)
+dir.create(output_dir, 
+           showWarnings = FALSE, 
+           recursive = TRUE)
 
 # ------------------------------------------------------------------------------
 # Loading raw SurveyCTO data --------------------------------------------------- 
@@ -75,7 +76,7 @@ to_yesno <- function(x) {
   x <- clean_text(x)
   case_when(
     x %in% c("1", "yes", "y", "sim", "sí", "si", "true", "t") ~ 1,
-    x %in% c("0", "no", "n", "false", "f") ~ 0,
+    x %in% c("0", "no", "n", "não", "false", "f") ~ 0,
     TRUE ~ NA_real_
   )
 }
@@ -305,13 +306,13 @@ raw_data <- raw_data |>
 # ------------------------------------------------------------------------------
 min_wage_lookup <- tribble(
   ~country_clean, ~hourly_earnings_ppp, ~wage_year, ~wage_source_note,
-  "argentina",   NA_real_, NA_real_, "TBD: add ILOSTAT PPP hourly earnings",
+  "argentina",   10.03,    2025,     "ILOSTAT average hourly earnings of employees in PPP$",
   "brazil",       8.12,    2025,     "ILOSTAT average hourly earnings of employees in PPP$",
   "chile",       12.71,    2024,     "ILOSTAT average hourly earnings of employees in PPP$",
   "colombia",     6.01,    2025,     "ILOSTAT average hourly earnings of employees in PPP$",
   "costa_rica",  NA_real_, NA_real_, "TBD: add ILOSTAT PPP hourly earnings",
   "ecuador",      7.71,    2025,     "ILOSTAT average hourly earnings of employees in PPP$",
-  "el_salvador", NA_real_, NA_real_, "TBD: add ILOSTAT PPP hourly earnings",
+  "el_salvador",  5.58,     2024,    "ILOSTAT average hourly earnings of employees in PPP$",
   "guatemala",   NA_real_, NA_real_, "TBD: add ILOSTAT PPP hourly earnings",
   "jamaica",     NA_real_, NA_real_, "TBD: add ILOSTAT PPP hourly earnings",
   "mexico",       5.29,    2025,     "ILOSTAT average hourly earnings of employees in PPP$",
@@ -323,7 +324,6 @@ min_wage_lookup <- tribble(
 # ------------------------------------------------------------------------------
 # Main cleaning pipeline -------------------------------------------------------
 # ------------------------------------------------------------------------------
-
 df_clean <- raw_data |>
   mutate(
     # --------------------------------------------------------------------------
@@ -1127,6 +1127,222 @@ if (any(analysis_df$flag_duplicate_transaction_uid, na.rm = TRUE)) {
 }
 
 # ------------------------------------------------------------------------------
+# Strict duplicate-submission audit --------------------------------------------
+# ------------------------------------------------------------------------------
+# Important:
+#   flag_duplicate_transaction_uid is a diagnostic flag only.
+#   It should not be used as an automatic exclusion rule because transaction_id is
+#   manually entered and can be reused by mistake.
+#
+# Exclusion rule:
+#   Drop only redundant rows in near-certain duplicate-submission clusters:
+#   same transaction_uid, confederate, country, channel, delivery, amount,
+#   outcome, normalized provider, transaction date, and transaction times within
+#   one minute. Within each cluster, retain the most complete/latest row.
+#
+# Code revision added on June 1st by Cedric 
+# ------------------------------------------------------------------------------
+normalize_provider <- function(x) {
+  x <- str_to_lower(str_squish(as.character(x)))
+  
+  case_when(
+    str_detect(x, "coinbase") ~ "coinbase",
+    str_detect(x, "binance") ~ "binance",
+    str_detect(x, "paypal") ~ "paypal",
+    str_detect(x, "wise") ~ "wise",
+    str_detect(x, "western|acciones") ~ "western_union_acciones_valores",
+    str_detect(x, "davivienda") ~ "davivienda",
+    str_detect(x, "santander") ~ "santander",
+    str_detect(x, "airpak|air pak") ~ "airpak",
+    TRUE ~ str_replace_all(x, "[^a-z0-9]+", "_")
+  )
+}
+
+analysis_df <- analysis_df |>
+  mutate(
+    audit_row_id = row_number(),
+    provider_norm = normalize_provider(institution_name),
+    tx_date_audit = as.Date(transaction_start_datetime),
+    tx_datetime_audit = transaction_start_datetime
+  )
+
+core_duplicate_audit <- analysis_df |>
+  filter(flag_duplicate_transaction_uid) |>
+  group_by(
+    transaction_uid,
+    confederate_id,
+    country_clean,
+    channel,
+    delivery,
+    amount,
+    transaction_outcome_label,
+    provider_norm,
+    tx_date_audit
+  ) |>
+  mutate(
+    n_core_group = n(),
+    time_span_minutes = as.numeric(
+      difftime(
+        max(tx_datetime_audit, na.rm = TRUE),
+        min(tx_datetime_audit, na.rm = TRUE),
+        units = "mins"
+      )
+    ),
+    n_instances = n_distinct(instance_id),
+    n_transaction_times = n_distinct(transaction_start_datetime),
+    n_cost_values = n_distinct(total_cost_without_time_local, na.rm = TRUE)
+  ) |>
+  ungroup() |>
+  filter(n_core_group > 1)
+
+probable_duplicate_groups <- core_duplicate_audit |>
+  filter(time_span_minutes <= 1) |>
+  group_by(
+    transaction_uid,
+    confederate_id,
+    country_clean,
+    channel,
+    delivery,
+    amount,
+    transaction_outcome_label,
+    provider_norm,
+    tx_date_audit
+  ) |>
+  mutate(
+    probable_duplicate_group = cur_group_id()
+  ) |>
+  ungroup() |>
+  select(
+    audit_row_id,
+    probable_duplicate_group
+  )
+
+completeness_vars <- c(
+  "success",
+  "kyc_score",
+  "cost_local",
+  "total_cost_without_time_local",
+  "time_hours",
+  "amount_beneficiary_receives_num",
+  "j_comments",
+  "k1_field_notes"
+)
+
+analysis_df <- analysis_df |>
+  left_join(probable_duplicate_groups, by = "audit_row_id") |>
+  mutate(
+    flag_probable_duplicate_submission =
+      !is.na(probable_duplicate_group),
+    
+    row_completeness = rowSums(
+      across(
+        any_of(completeness_vars),
+        ~ !is.na(.x) & as.character(.x) != ""
+      )
+    )
+  ) |>
+  group_by(probable_duplicate_group) |>
+  arrange(
+    desc(row_completeness),
+    desc(submission_datetime),
+    .by_group = TRUE
+  ) |>
+  mutate(
+    drop_probable_duplicate =
+      !is.na(probable_duplicate_group) &
+      row_number() > 1
+  ) |>
+  ungroup() |>
+  arrange(audit_row_id)
+
+duplicate_group_check <- analysis_df |>
+  filter(flag_probable_duplicate_submission) |>
+  group_by(probable_duplicate_group, transaction_uid) |>
+  summarise(
+    n_rows_in_group = n(),
+    n_kept = sum(!drop_probable_duplicate),
+    n_dropped = sum(drop_probable_duplicate),
+    kept_audit_row_id = audit_row_id[!drop_probable_duplicate][1],
+    dropped_audit_row_ids = paste(audit_row_id[drop_probable_duplicate], collapse = ", "),
+    .groups = "drop"
+  )
+
+duplicate_decision_summary <- analysis_df |>
+  summarise(
+    n_before_duplicate_drop = n(),
+    n_flag_duplicate_transaction_uid =
+      sum(flag_duplicate_transaction_uid, na.rm = TRUE),
+    n_probable_duplicate_rows =
+      sum(flag_probable_duplicate_submission, na.rm = TRUE),
+    n_rows_dropped_as_probable_duplicates =
+      sum(drop_probable_duplicate, na.rm = TRUE),
+    n_after_duplicate_drop =
+      n() - sum(drop_probable_duplicate, na.rm = TRUE)
+  )
+
+probable_duplicates_dropped <- analysis_df |>
+  filter(drop_probable_duplicate)
+
+duplicate_transaction_uid_audit_all_flagged <- analysis_df |>
+  filter(flag_duplicate_transaction_uid) |>
+  arrange(
+    transaction_uid,
+    transaction_start_datetime,
+    submission_datetime
+  )
+
+# Apply the conservative exclusion.
+analysis_df <- analysis_df |>
+  filter(!drop_probable_duplicate) |>
+  arrange(audit_row_id)
+
+analysis_df <- analysis_df |>
+  mutate(
+    data_quality_flag_final = case_when(
+      flag_no_consent ~ "No consent",
+      
+      flag_missing_transaction_id | flag_missing_confederate_id ~
+        "Missing critical ID",
+      
+      flag_missing_channel | flag_missing_success ~
+        "Missing treatment or success outcome",
+      
+      flag_duplicate_instance_id ~
+        "Duplicate instance ID",
+      
+      flag_probable_duplicate_submission ~
+        "Retained representative of probable duplicate cluster",
+      
+      flag_duplicate_transaction_uid ~
+        "Repeated transaction UID retained after audit",
+      
+      flag_invalid_amount | flag_invalid_channel_method ~
+        "Protocol/coding inconsistency",
+      
+      flag_negative_settlement_time |
+        flag_negative_transaction_duration |
+        flag_negative_cost_local ~
+        "Invalid negative value",
+      
+      flag_completed_but_no_received_confirmation ~
+        "Completed but not confirmed received",
+      
+      flag_completed_missing_cost_local |
+        flag_completed_missing_time |
+        flag_missing_kyc ~
+        "Outcome missingness",
+      
+      flag_scorecard_not_same_day ~
+        "Late scorecard",
+      
+      flag_missing_wage_lookup ~
+        "Missing wage lookup",
+      
+      TRUE ~ "OK"
+    )
+  )
+
+# ------------------------------------------------------------------------------
 # Diagnostics/sanity checks ----------------------------------------------------
 # ------------------------------------------------------------------------------
 diagnostics <- list(
@@ -1166,11 +1382,20 @@ diagnostics <- list(
     ),
   
   quality_flags = analysis_df |>
-    count(data_quality_flag, sort = TRUE),
+    count(data_quality_flag_final, sort = TRUE),
   
   duplicate_transaction_uids = analysis_df |>
     filter(flag_duplicate_transaction_uid) |>
     count(transaction_uid, sort = TRUE),
+  
+  duplicate_decision_summary = duplicate_decision_summary,
+  
+  duplicate_group_check = duplicate_group_check,
+  
+  probable_duplicates_dropped = probable_duplicates_dropped,
+  
+  duplicate_transaction_uid_audit_all_flagged =
+    duplicate_transaction_uid_audit_all_flagged,
   
   duplicate_instance_ids = analysis_df |>
     filter(flag_duplicate_instance_id) |>
@@ -1293,35 +1518,35 @@ print(diagnostics$balance_by_channel)
 # ------------------------------------------------------------------------------
 write_csv(
   analysis_df,
-  file.path(output_dir, "IADB_surveycto_clean_may16.csv")
+  file.path(output_dir, "IADB_surveycto_clean_june1.csv")
 )
 
 saveRDS(
   analysis_df,
-  file.path(output_dir, "IADB_surveycto_clean_may16.rds")
+  file.path(output_dir, "IADB_surveycto_clean_june1.rds")
 )
 
 saveRDS(
   diagnostics,
-  file.path(output_dir, "IADB_surveycto_clean_diagnostics_may16.rds")
+  file.path(output_dir, "IADB_surveycto_clean_diagnostics_june1.rds")
 )
 
 write_csv(
   diagnostics$balance_by_channel,
-  file.path(output_dir, "IADB_surveycto_balance_by_channel_may16.csv")
+  file.path(output_dir, "IADB_surveycto_balance_by_channel_june1.csv")
 )
 
 #write_csv(
 #  diagnostics$missing_by_channel,
-#  file.path(output_dir, "IADB_surveycto_missing_by_channel_may16.csv")
+#  file.path(output_dir, "IADB_surveycto_missing_by_channel_june1.csv")
 #)
 
-#write_csv(
-#  diagnostics$quality_flags,
-#  file.path(output_dir, "IADB_surveycto_quality_flags_may16.csv")
-#)
+write_csv(
+  diagnostics$quality_flags,
+  file.path(output_dir, "IADB_surveycto_quality_flags_june1.csv")
+)
 
-#write_csv(
-#  diagnostics$kyc_validation,
-#  file.path(output_dir, "IADB_surveycto_kyc_validation_may16.csv")
-#)
+write_csv(
+  diagnostics$kyc_validation,
+  file.path(output_dir, "IADB_surveycto_kyc_validation_june1.csv")
+)
