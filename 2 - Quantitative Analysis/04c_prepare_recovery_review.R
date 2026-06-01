@@ -1,7 +1,8 @@
 # ==============================================================================
-# IADB - 04c Prepare Strong Recovery Candidates for Review ----------------------
+# IADB - 04c Prepare Strong Recovery Candidates for Review ---------------------
 # Author: Cedric Antunes (Evaluasi)
 # Date: May 18, 2026
+# Minimal addition made on June 1st, 2026
 # Purpose:
 #   1. Load top recovery candidates from duplicate-slot recovery audit;
 #   2. Keep strong recovery candidates;
@@ -63,10 +64,57 @@ if (is.na(top_recovery_candidates_path)) {
 cat("\nReading top recovery candidates from:\n")
 cat(top_recovery_candidates_path, "\n")
 
+# Minimal addition made on June 1st
+if (file.info(top_recovery_candidates_path)$size == 0) {
+  
+  cat("\nNo recovery candidates found. Creating empty 04c outputs and exiting.\n")
+  
+  empty_tbl <- tibble()
+  
+  write_csv(
+    empty_tbl,
+    file.path(output_dir, "IADB_04c_all_strong_recovery_candidates.csv")
+  )
+  
+  write_csv(
+    empty_tbl,
+    file.path(output_dir, "IADB_04c_candidate_slot_pressure.csv")
+  )
+  
+  write_csv(
+    empty_tbl,
+    file.path(output_dir, "IADB_04c_strong_recovery_candidates_for_review.csv")
+  )
+  
+  write_csv(
+    empty_tbl,
+    file.path(output_dir, "IADB_04c_recovery_decisions_template.csv")
+  )
+  
+  summary_04c <- tibble(
+    item = c(
+      "strong_recovery_candidate_rows",
+      "unique_survey_rows_with_strong_candidate",
+      "safe_to_auto_recover_candidates",
+      "candidate_slots_targeted_more_than_once",
+      "manual_decision_rows_to_review"
+    ),
+    n = c(0, 0, 0, 0, 0)
+  )
+  
+  write_csv(
+    summary_04c,
+    file.path(output_dir, "IADB_04c_recovery_review_summary.csv")
+  )
+  
+  print(summary_04c, n = Inf)
+  
+  quit(save = "no")
+}
+
 # ------------------------------------------------------------------------------
 # Load top recovery candidates --------------------------------------------------
 # ------------------------------------------------------------------------------
-
 top_recovery_candidates <- read_csv(
   top_recovery_candidates_path,
   show_col_types = FALSE
@@ -76,7 +124,6 @@ top_recovery_candidates <- read_csv(
 # ------------------------------------------------------------------------------
 # Basic safety checks -----------------------------------------------------------
 # ------------------------------------------------------------------------------
-
 required_cols <- c(
   "survey_instance_id",
   "original_matched_slot",
@@ -120,7 +167,6 @@ if (length(missing_cols) > 0) {
 # ------------------------------------------------------------------------------
 # Keep only strong recovery candidates ------------------------------------------
 # ------------------------------------------------------------------------------
-
 strong_candidates <- top_recovery_candidates |>
   mutate(
     recovery_score = suppressWarnings(as.numeric(recovery_score)),
@@ -151,7 +197,6 @@ write_csv(
 # ------------------------------------------------------------------------------
 # Candidate slot pressure -------------------------------------------------------
 # ------------------------------------------------------------------------------
-
 candidate_slot_pressure <- strong_candidates |>
   filter(candidate_rank == 1) |>
   count(
