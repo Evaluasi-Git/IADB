@@ -2,6 +2,7 @@
 # IADB - 04b Duplicate Slot Recovery Audit -------------------------------------
 # Author: Cedric Antunes (Evaluasi) --------------------------------------------
 # Date: May 18, 2026 -----------------------------------------------------------
+# Minimal revisions implemented on June 1st
 # Purpose:
 #   1. Check the gap between SurveyCTO rows and unique transaction-slot rows;
 #   2. Identify true duplicates/resubmissions;
@@ -114,7 +115,11 @@ needed_audit_cols <- c(
   "confederate_match_key",
   "transaction_date",
   "survey_transaction_id_raw",
-  "survey_transaction_id_parsed"
+  "survey_transaction_id_parsed",
+  "exclude_from_sap",
+  "schedule_slot_id_final",
+  "unique_transaction_id",
+  "match_action"
 )
 
 audit <- full_audit |>
@@ -131,7 +136,17 @@ audit <- full_audit |>
     best_assigned_amount = to_num(best_assigned_amount),
     reviewed_by_team_num = to_num(reviewed_by_team_num),
     
-    unique_transaction_id = best_schedule_slot_id,
+    exclude_from_sap = as_logical_safe(exclude_from_sap),
+    
+    schedule_slot_id_final = na_if(schedule_slot_id_final, ""),
+    unique_transaction_id = na_if(unique_transaction_id, ""),
+    
+    unique_transaction_id = case_when(
+      exclude_from_sap ~ NA_character_,
+      !is.na(unique_transaction_id) ~ unique_transaction_id,
+      !is.na(schedule_slot_id_final) ~ schedule_slot_id_final,
+      TRUE ~ NA_character_
+    ),
     
     # Full audit usually has channel_std/amount/delivery_std rather than
     # survey_channel/survey_amount/survey_delivery. This makes the script robust.
@@ -160,7 +175,11 @@ audit <- full_audit |>
   )
 
 matched_audit <- audit |>
-  filter(matched_to_schedule, !is.na(unique_transaction_id))
+  filter(
+    !exclude_from_sap,
+    matched_to_schedule,
+    !is.na(unique_transaction_id)
+  )
 
 # ------------------------------------------------------------------------------
 # Slot-level duplicate classification ------------------------------------------
