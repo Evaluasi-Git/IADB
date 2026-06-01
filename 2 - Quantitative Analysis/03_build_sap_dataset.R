@@ -11,7 +11,7 @@
 #   6. Build schedule-level SAP denominator and observed-attempt SAP sample.
 #
 # Inputs:
-#   data/clean/IADB_surveycto_clean_may16.csv
+#   data/clean/IADB_surveycto_clean_june1.csv
 #   data/clean/sap_dataset_builder/IADB_payment_schedule_enriched_with_randomization.csv
 #
 # Main outputs:
@@ -45,7 +45,7 @@ suppressPackageStartupMessages({
 survey_path <- here(
   "data",
   "clean",
-  "IADB_surveycto_clean_may16.csv"
+  "IADB_surveycto_clean_june1.csv"
 )
 
 payment_schedule_path <- here(
@@ -311,6 +311,10 @@ expected_survey_cols <- c(
   "interaction_time_hours",
   "reviewed_by_team",
   "data_quality_flag",
+  "data_quality_flag_final",
+  "flag_probable_duplicate_submission",
+  "drop_probable_duplicate",
+  "probable_duplicate_group",
   "j_comments",
   "k1_field_notes",
   "k2_red_flags",
@@ -325,6 +329,16 @@ survey_raw <- survey_raw |>
 survey <- survey_raw |>
   mutate(
     survey_row_id = row_number(),
+    
+    data_quality_flag_original = data_quality_flag,
+    
+    data_quality_flag_final = case_when(
+      !is.na(data_quality_flag_final) & data_quality_flag_final != "" ~
+        data_quality_flag_final,
+      TRUE ~ data_quality_flag
+    ),
+    
+    data_quality_flag = data_quality_flag_final,
     
     survey_instance_id = case_when(
       !is.na(instance_id) & instance_id != "" ~ instance_id,
@@ -629,7 +643,10 @@ candidate_matches <- survey |>
     transaction_duration_hours,
     reviewed_by_team,
     reviewed_by_team_num,
-    data_quality_flag
+    data_quality_flag,
+    data_quality_flag_original,
+    data_quality_flag_final,
+    flag_probable_duplicate_submission
   ) |>
   left_join(
     payment_schedule,
@@ -1284,6 +1301,10 @@ survey_dedup_for_join <- survey_dedup |>
       "match_action",
       "source_of_decision",
       "manual_note",
+      "data_quality_flag_original",
+      "data_quality_flag_final",
+      "flag_probable_duplicate_submission",
+      "probable_duplicate_group",
       
       "treatment_adherent",
       "channel_adherent",
@@ -1522,7 +1543,18 @@ bad_survey_completion_review <- sap_base |>
   filter(
     attempted,
     is.na(data_quality_flag) |
-      data_quality_flag != "OK" |
+      data_quality_flag %in% c(
+        "No consent",
+        "Missing critical ID",
+        "Missing treatment or success outcome",
+        "Duplicate instance ID",
+        "Protocol/coding inconsistency",
+        "Invalid negative value",
+        "Completed but not confirmed received",
+        "Outcome missingness",
+        "Late scorecard",
+        "Missing wage lookup"
+      ) |
       is.na(success) |
       is.na(kyc_score) |
       (success == 1 & is.na(cost_local)) |
@@ -1549,6 +1581,10 @@ bad_survey_completion_review <- sap_base |>
     time_hours,
     transaction_duration_hours,
     data_quality_flag,
+    data_quality_flag_original,
+    data_quality_flag_final,
+    flag_probable_duplicate_submission,
+    probable_duplicate_group,
     survey_transaction_id_raw,
     submission_datetime,
     transaction_date,
