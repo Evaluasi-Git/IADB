@@ -1,7 +1,6 @@
 # ==============================================================================
 # IADB - 09 Robustness: Functional Forms and Outlier Sensitivity -----------------
 # Author: Cedric Antunes (Evaluasi)
-# Revised by: ChatGPT
 # Date: June 2026
 # Version: v4 - robustly maps focal coefficient names and preserves diagnostics for linear CR2 robustness
 #              models, sanitizes output columns, and preserves skipped-model diagnostics
