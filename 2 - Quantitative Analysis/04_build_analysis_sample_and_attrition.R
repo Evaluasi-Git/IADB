@@ -2,6 +2,7 @@
 # IADB - 04 Build Analysis Samples and Attrition Diagnostics -------------------
 # Author: Cedric Antunes (Evaluasi) --------------------------------------------
 # Date: May 19, 2026 -----------------------------------------------------------
+# Minimal revisions implemented on June 1st
 # Purpose:
 #   1. Diagnose observation loss from SurveyCTO to SAP samples;
 #   2. Build a maximal automated matched sample;
@@ -106,7 +107,18 @@ audit_prepped <- full_audit |>
     has_success_kyc =
       !is.na(success) & !is.na(kyc_score),
     
-    unique_transaction_id = best_schedule_slot_id
+    #unique_transaction_id = best_schedule_slot_id
+    exclude_from_sap = as_logical_safe(exclude_from_sap),
+    
+    schedule_slot_id_final = na_if(schedule_slot_id_final, ""),
+    unique_transaction_id = na_if(unique_transaction_id, ""),
+    
+    unique_transaction_id = case_when(
+      exclude_from_sap ~ NA_character_,
+      !is.na(unique_transaction_id) ~ unique_transaction_id,
+      !is.na(schedule_slot_id_final) ~ schedule_slot_id_final,
+      TRUE ~ NA_character_
+    )
   )
 
 # ------------------------------------------------------------------------------
@@ -150,6 +162,7 @@ slot_conflicts <- audit_prepped |>
 # ------------------------------------------------------------------------------
 maximal_selected <- audit_prepped |>
   filter(
+    !exclude_from_sap,
     matched_to_schedule,
     !is.na(unique_transaction_id)
   ) |>
