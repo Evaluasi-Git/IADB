@@ -1,13 +1,11 @@
 # ==============================================================================
-# IADB - 04c Prepare Strong Recovery Candidates for Review ----------------------
-# Author: Cedric Antunes (Evaluasi)
-# Date: May 18, 2026
+# IADB - 04c Recovery Review Compatibility Check -------------------------------
+# Author: Cedric Antunes (Evaluasi) --------------------------------------------
+# Revised: June 2026
 # Purpose:
-#   1. Load top recovery candidates from duplicate-slot recovery audit;
-#   2. Keep strong recovery candidates;
-#   3. Select the top candidate unused schedule slot for each SurveyCTO row;
-#   4. Diagnose whether candidate slots are targeted by multiple rows;
-#   5. Export a small manual decision template for recovery review.
+#   1. Confirm that manual recovery review is no longer required;
+#   2. Verify that Script 03 produced duplicate-resolution outputs;
+#   3. Write empty compatibility outputs expected by older pipeline versions.
 # ==============================================================================
 
 # Cleaning my environment
@@ -24,296 +22,135 @@ suppressPackageStartupMessages({
 })
 
 # ------------------------------------------------------------------------------
-# Paths ------------------------------------------------------------------------
+# Replication notes ------------------------------------------------------------
 # ------------------------------------------------------------------------------
+# Required inputs:
+#   These files must already exist from Scripts 03 and 04b:
+#   - IADB_03_slot_level_duplicate_resolution.csv
+#   - IADB_sap_observed_first_pass.rds
+#   - IADB_sap_reviewed_submissions.rds
+#   - IADB_04b_duplicate_resolution_audit_summary.csv
+#
+# What to change before running:
+#   - Update `output_dir` so it points to the local folder where Scripts 03 and
+#     04b saved the SAP dataset-builder outputs.
+#   - This script reads the required inputs from `output_dir` and saves its own
+#     recovery-review compatibility files to the same folder.
+#
+# Example:
+#   output_dir <- "C:/Users/YourName/Drive/IADB_outputs/data/clean/sap_dataset_builder"
 
 output_dir <- "D:/Evaluasi/data/clean/sap_dataset_builder"
 
-dir.create(
-  output_dir,
-  showWarnings = FALSE,
-  recursive = TRUE
+# ------------------------------------------------------------------------------
+# Required Script 03 / 04b outputs ---------------------------------------------
+# ------------------------------------------------------------------------------
+required_paths <- c(
+  file.path(output_dir, "IADB_03_slot_level_duplicate_resolution.csv"),
+  file.path(output_dir, "IADB_sap_observed_first_pass.rds"),
+  file.path(output_dir, "IADB_sap_reviewed_submissions.rds"),
+  file.path(output_dir, "IADB_04b_duplicate_resolution_audit_summary.csv")
 )
 
-# Accept either 04a or 04b naming, depending on how the previous script was saved.
-top_recovery_candidates_path_04a <- file.path(
-  output_dir,
-  "IADB_04a_top_recovery_candidates.csv"
-)
+missing_paths <- required_paths[!file.exists(required_paths)]
 
-top_recovery_candidates_path_04b <- file.path(
-  output_dir,
-  "IADB_04b_top_recovery_candidates.csv"
-)
-
-top_recovery_candidates_path <- case_when(
-  file.exists(top_recovery_candidates_path_04a) ~ top_recovery_candidates_path_04a,
-  file.exists(top_recovery_candidates_path_04b) ~ top_recovery_candidates_path_04b,
-  TRUE ~ NA_character_
-)
-
-if (is.na(top_recovery_candidates_path)) {
+if (length(missing_paths) > 0) {
   stop(
-    "No top recovery candidate file found. Expected either:\n",
-    top_recovery_candidates_path_04a, "\n",
-    top_recovery_candidates_path_04b
+    "Script 04c requires the revised Script 03 and Script 04b outputs. Missing:\n",
+    paste(missing_paths, collapse = "\n")
   )
 }
 
-cat("\nReading top recovery candidates from:\n")
-cat(top_recovery_candidates_path, "\n")
+slot_resolution <- read_csv(
+  file.path(output_dir, "IADB_03_slot_level_duplicate_resolution.csv"),
+  show_col_types = FALSE
+) |>
+  clean_names()
 
-# ------------------------------------------------------------------------------
-# Load top recovery candidates --------------------------------------------------
-# ------------------------------------------------------------------------------
+sap_observed <- readRDS(
+  file.path(output_dir, "IADB_sap_observed_first_pass.rds")
+) |>
+  clean_names()
 
-top_recovery_candidates <- read_csv(
-  top_recovery_candidates_path,
+sap_reviewed <- readRDS(
+  file.path(output_dir, "IADB_sap_reviewed_submissions.rds")
+) |>
+  clean_names()
+
+audit_04b <- read_csv(
+  file.path(output_dir, "IADB_04b_duplicate_resolution_audit_summary.csv"),
   show_col_types = FALSE
 ) |>
   clean_names()
 
 # ------------------------------------------------------------------------------
-# Basic safety checks -----------------------------------------------------------
+# Compatibility outputs ---------------------------------------------------------
 # ------------------------------------------------------------------------------
-
-required_cols <- c(
-  "survey_instance_id",
-  "original_matched_slot",
-  "candidate_schedule_slot_id",
-  "recovery_score",
-  "confederate_match_key",
-  "submission_datetime",
-  "transaction_date",
-  "survey_transaction_id_raw",
-  "survey_transaction_id_parsed",
-  "survey_channel",
-  "survey_amount",
-  "survey_delivery",
-  "transaction_outcome_label",
-  "success",
-  "kyc_score",
-  "assigned_channel",
-  "assigned_amount",
-  "assigned_delivery",
-  "assigned_transaction_id",
-  "assigned_order",
-  "assigned_date",
-  "sent_datetime",
-  "funds_sent",
-  "channel_match",
-  "amount_match",
-  "delivery_match",
-  "parsed_id_match",
-  "date_distance"
+empty_template <- tibble(
+  survey_instance_id = character(),
+  suggested_action = character(),
+  safe_to_auto_recover_candidate = logical(),
+  original_matched_slot = character(),
+  candidate_schedule_slot_id = character(),
+  recovery_score = numeric(),
+  recovery_action = character(),
+  corrected_schedule_slot_id = character(),
+  recovery_note = character()
 )
 
-missing_cols <- setdiff(required_cols, names(top_recovery_candidates))
-
-if (length(missing_cols) > 0) {
-  stop(
-    "The top recovery candidates file is missing required columns:\n",
-    paste(missing_cols, collapse = ", ")
-  )
-}
-
-# ------------------------------------------------------------------------------
-# Keep only strong recovery candidates ------------------------------------------
-# ------------------------------------------------------------------------------
-
-strong_candidates <- top_recovery_candidates |>
-  mutate(
-    recovery_score = suppressWarnings(as.numeric(recovery_score)),
-    date_distance = suppressWarnings(as.numeric(date_distance))
-  ) |>
-  filter(recovery_score >= 140) |>
-  arrange(
-    survey_instance_id,
-    desc(recovery_score),
-    date_distance
-  ) |>
-  group_by(survey_instance_id) |>
-  mutate(
-    candidate_rank = row_number(),
-    top_score = first(recovery_score),
-    second_score = nth(recovery_score, 2),
-    score_margin = top_score - second_score,
-    n_strong_candidates_for_row = n()
-  ) |>
-  ungroup()
-
-# Save all strong candidates, not only the top-ranked candidate.
 write_csv(
-  strong_candidates,
+  empty_template,
   file.path(output_dir, "IADB_04c_all_strong_recovery_candidates.csv")
 )
 
-# ------------------------------------------------------------------------------
-# Candidate slot pressure -------------------------------------------------------
-# ------------------------------------------------------------------------------
-
-candidate_slot_pressure <- strong_candidates |>
-  filter(candidate_rank == 1) |>
-  count(
-    candidate_schedule_slot_id,
-    name = "n_rows_targeting_slot"
-  ) |>
-  arrange(desc(n_rows_targeting_slot))
-
 write_csv(
-  candidate_slot_pressure,
+  empty_template,
   file.path(output_dir, "IADB_04c_candidate_slot_pressure.csv")
 )
 
-# ------------------------------------------------------------------------------
-# Build review file: one top candidate per SurveyCTO row ------------------------
-# ------------------------------------------------------------------------------
-
-strong_review <- strong_candidates |>
-  filter(candidate_rank == 1) |>
-  left_join(
-    candidate_slot_pressure,
-    by = "candidate_schedule_slot_id"
-  ) |>
-  mutate(
-    safe_to_auto_recover_candidate = case_when(
-      n_strong_candidates_for_row == 1 &
-        n_rows_targeting_slot == 1 &
-        recovery_score >= 140 ~ TRUE,
-      TRUE ~ FALSE
-    ),
-    
-    suggested_action = case_when(
-      safe_to_auto_recover_candidate ~
-        "review_then_recover_to_candidate_slot",
-      TRUE ~
-        "manual_review_required"
-    )
-  ) |>
-  select(
-    survey_instance_id,
-    suggested_action,
-    safe_to_auto_recover_candidate,
-    
-    original_matched_slot,
-    candidate_schedule_slot_id,
-    recovery_score,
-    score_margin,
-    n_strong_candidates_for_row,
-    n_rows_targeting_slot,
-    
-    confederate_match_key,
-    submission_datetime,
-    transaction_date,
-    
-    survey_transaction_id_raw,
-    survey_transaction_id_parsed,
-    
-    survey_channel,
-    survey_amount,
-    survey_delivery,
-    transaction_outcome_label,
-    success,
-    kyc_score,
-    
-    assigned_channel,
-    assigned_amount,
-    assigned_delivery,
-    assigned_transaction_id,
-    assigned_order,
-    assigned_date,
-    sent_datetime,
-    funds_sent,
-    
-    channel_match,
-    amount_match,
-    delivery_match,
-    parsed_id_match,
-    date_distance
-  )
-
 write_csv(
-  strong_review,
+  empty_template,
   file.path(output_dir, "IADB_04c_strong_recovery_candidates_for_review.csv")
 )
 
-# ------------------------------------------------------------------------------
-# Manual decision template ------------------------------------------------------
-# ------------------------------------------------------------------------------
-
-recovery_decisions_template <- strong_review |>
-  transmute(
-    survey_instance_id,
-    suggested_action,
-    safe_to_auto_recover_candidate,
-    
-    original_matched_slot,
-    candidate_schedule_slot_id,
-    recovery_score,
-    score_margin,
-    n_strong_candidates_for_row,
-    n_rows_targeting_slot,
-    
-    confederate_match_key,
-    
-    survey_transaction_id_raw,
-    survey_transaction_id_parsed,
-    survey_channel,
-    survey_amount,
-    survey_delivery,
-    transaction_outcome_label,
-    success,
-    kyc_score,
-    
-    assigned_transaction_id,
-    assigned_channel,
-    assigned_amount,
-    assigned_delivery,
-    assigned_order,
-    assigned_date,
-    
-    channel_match,
-    amount_match,
-    delivery_match,
-    parsed_id_match,
-    date_distance,
-    
-    # Fill manually.
-    recovery_action = NA_character_,
-    
-    # Allowed recovery_action values:
-    # "recover_to_candidate_slot"
-    # "do_not_recover_true_duplicate"
-    # "do_not_recover_uncertain"
-    # "needs_further_review"
-    
-    corrected_schedule_slot_id = candidate_schedule_slot_id,
-    recovery_note = NA_character_
-  )
-
 write_csv(
-  recovery_decisions_template,
+  empty_template,
   file.path(output_dir, "IADB_04c_recovery_decisions_template.csv")
 )
 
-# ------------------------------------------------------------------------------
-# Summary ----------------------------------------------------------------------
-# ------------------------------------------------------------------------------
-
 summary_04c <- tibble(
   item = c(
+    "manual_recovery_review_needed",
+    "strict_slot_level_observed_rows",
+    "strict_slot_level_unique_transactions",
+    "reviewed_submissions_rows",
+    "reviewed_submissions_unique_transactions",
+    "rows_excluded_only_from_slot_level_sap",
+    "slot_resolution_rows",
     "strong_recovery_candidate_rows",
-    "unique_survey_rows_with_strong_candidate",
-    "safe_to_auto_recover_candidates",
-    "candidate_slots_targeted_more_than_once",
     "manual_decision_rows_to_review"
   ),
   n = c(
-    nrow(strong_candidates),
-    n_distinct(strong_candidates$survey_instance_id),
-    sum(strong_review$safe_to_auto_recover_candidate, na.rm = TRUE),
-    sum(candidate_slot_pressure$n_rows_targeting_slot > 1, na.rm = TRUE),
-    nrow(recovery_decisions_template)
+    0,
+    nrow(sap_observed),
+    n_distinct(sap_observed$unique_transaction_id),
+    nrow(sap_reviewed),
+    n_distinct(sap_reviewed$unique_transaction_id),
+    sum(sap_reviewed$exclude_from_slot_level_sap, na.rm = TRUE),
+    nrow(slot_resolution),
+    0,
+    0
+  ),
+  note = c(
+    "No separate 04c recovery review is needed; Script 03 now handles duplicate-slot recovery/resolution.",
+    NA_character_,
+    NA_character_,
+    NA_character_,
+    NA_character_,
+    "Rows retained in reviewed-submissions but excluded from strict slot-level SAP.",
+    "Rows involved in duplicate-slot resolution from Script 03.",
+    "No additional strong recovery candidates generated by revised pipeline.",
+    "No manual 04c decisions required."
   )
 )
 
@@ -322,34 +159,12 @@ write_csv(
   file.path(output_dir, "IADB_04c_recovery_review_summary.csv")
 )
 
-cat("\n=== 04c Recovery review summary ===\n")
-print(summary_04c, n = Inf)
-
-# ------------------------------------------------------------------------------
-# Notes for manual review -------------------------------------------------------
-# ------------------------------------------------------------------------------
-# Fill only two columns in IADB_04c_recovery_decisions_template.csv:
-#
-#   recovery_action
-#   recovery_note
-#
-# Use:
-#
-#   recover_to_candidate_slot
-#     when the row clearly represents a distinct transaction and the candidate
-#     unused schedule slot is credible.
-#
-#   do_not_recover_true_duplicate
-#     when the row appears to be a duplicate/resubmission of the original matched
-#     transaction.
-#
-#   do_not_recover_uncertain
-#     when the candidate slot is plausible but evidence is insufficient.
-#
-#   needs_further_review
-#     when receipts, payment logs, or confederate clarification are needed.
-#
-# Leave corrected_schedule_slot_id as candidate_schedule_slot_id only if choosing:
-#
-#   recover_to_candidate_slot
-# ==============================================================================
+cat("\nScript 04c completed successfully.\n")
+cat("No separate recovery review is required under the revised pipeline.\n")
+cat("Strict slot-level observed rows: ", nrow(sap_observed), "\n")
+cat("Reviewed-submissions rows: ", nrow(sap_reviewed), "\n")
+cat(
+  "Rows excluded only from strict slot-level SAP: ",
+  sum(sap_reviewed$exclude_from_slot_level_sap, na.rm = TRUE),
+  "\n"
+)
