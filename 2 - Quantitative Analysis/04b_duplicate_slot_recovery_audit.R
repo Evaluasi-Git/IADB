@@ -1,12 +1,13 @@
 # ==============================================================================
-# IADB - 04b Duplicate Slot Recovery Audit -------------------------------------
+# IADB - 04b Duplicate Slot Resolution Audit -----------------------------------
 # Author: Cedric Antunes (Evaluasi) --------------------------------------------
 # Date: May 18, 2026 -----------------------------------------------------------
+# Revised: June 2026 -----------------------------------------------------------
 # Purpose:
-#   1. Check the gap between SurveyCTO rows and unique transaction-slot rows;
-#   2. Identify true duplicates/resubmissions;
-#   3. Identify duplicate-slot groups with substantive conflicts;
-#   4. Search for possible unused schedule slots that could recover observations;
+#   1. Audit duplicate-slot resolution from Script 03;
+#   2. Verify that the strict slot-level sample has one row per schedule slot;
+#   3. Verify that duplicate-slot extras are retained in reviewed-submissions;
+#   4. Document which rows were excluded only from the strict slot-level SAP sample.
 # ==============================================================================
 
 # Cleaning my environment
@@ -23,32 +24,36 @@ suppressPackageStartupMessages({
   library(lubridate)
 })
 
-# Output directoru
+# ------------------------------------------------------------------------------
+# Replication notes ------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Required inputs:
+#   These files must already exist from Script 03:
+#   - IADB_03_surveycto_schedule_matched_full_audit.csv
+#   - IADB_sap_observed_first_pass.rds
+#   - IADB_sap_reviewed_submissions.rds
+#   - IADB_03_slot_level_duplicate_resolution.csv
+#   - IADB_03_sap_merge_checks.csv
+#
+#   Optional inputs, if produced by Script 03:
+#   - IADB_03_duplicate_slot_reassignment_log.csv
+#   - IADB_03_final_duplicate_schedule_slots.csv
+#
+# What to change before running:
+#   - Update `output_dir` so it points to the local folder where Script 03 saved
+#     the SAP dataset-builder outputs.
+#   - This script reads the required Script 03 outputs from `output_dir` and
+#     saves its own duplicate-resolution audit files to the same folder.
+#
+# Example:
+#   output_dir <- "C:/Users/YourName/Drive/IADB_outputs/data/clean/sap_dataset_builder"
+
+# Output directory -------------------------------------------------------------
 output_dir <- "D:/Evaluasi/data/clean/sap_dataset_builder"
-
-# ------------------------------------------------------------------------------
-# Loading matched full audit and maximal-auto schedule-level sample ------------
-# ------------------------------------------------------------------------------
-full_audit <- read_csv(
-  file.path(output_dir, "IADB_03_surveycto_schedule_matched_full_audit.csv"),
-  show_col_types = FALSE
-) |>
-  clean_names()
-
-sap_base_maximal <- readRDS(
-  file.path(output_dir, "IADB_sap_schedule_level_base_maximal_auto.rds")
-) |>
-  clean_names()
-
-sap_observed_maximal <- readRDS(
-  file.path(output_dir, "IADB_sap_observed_maximal_auto.rds")
-) |>
-  clean_names()
 
 # ------------------------------------------------------------------------------
 # Helpers ----------------------------------------------------------------------
 # ------------------------------------------------------------------------------
-# Safe logical 
 as_logical_safe <- function(x) {
   case_when(
     is.logical(x) ~ x,
@@ -58,373 +63,563 @@ as_logical_safe <- function(x) {
   )
 }
 
-# Safe missing cols
 add_missing_cols <- function(df, cols) {
   missing_cols <- setdiff(cols, names(df))
   
   if (length(missing_cols) > 0) {
     for (cc in missing_cols) {
-      df[[cc]] <- NA_character_
+      df[[cc]] <- NA
     }
   }
   
   df
 }
 
-to_num <- function(x) {
-  suppressWarnings(as.numeric(x))
-}
-
-to_date_safe <- function(x) {
-  suppressWarnings(as.Date(x))
+read_csv_if_exists <- function(path) {
+  if (file.exists(path)) {
+    read_csv(path, show_col_types = FALSE) |>
+      clean_names()
+  } else {
+    tibble()
+  }
 }
 
 # ------------------------------------------------------------------------------
-# Preparing audit data ---------------------------------------------------------
+# Required input paths ----------------------------------------------------------
 # ------------------------------------------------------------------------------
-needed_audit_cols <- c(
-  "matched_to_schedule",
-  "submission_datetime",
-  "success",
-  "kyc_score",
-  "amount",
-  "assigned_amount",
-  "best_assigned_amount",
-  "reviewed_by_team_num",
-  "best_schedule_slot_id",
-  "survey_channel",
-  "survey_amount",
-  "survey_delivery",
-  "channel_std",
-  "delivery_std",
-  "best_channel_match",
-  "best_amount_match",
-  "best_delivery_match",
-  "best_parsed_id_match",
-  "best_assigned_channel",
-  "best_assigned_delivery",
-  "best_assigned_transaction_id",
-  "best_assigned_order",
-  "best_assigned_date",
-  "transaction_outcome_label",
-  "match_confidence",
-  "best_date_distance_assigned",
-  "best_order_distance",
-  "survey_instance_id",
-  "confederate_match_key",
-  "transaction_date",
-  "survey_transaction_id_raw",
-  "survey_transaction_id_parsed"
+full_audit_path <- file.path(
+  output_dir,
+  "IADB_03_surveycto_schedule_matched_full_audit.csv"
 )
 
-audit <- full_audit |>
-  add_missing_cols(needed_audit_cols) |>
+sap_observed_slot_path <- file.path(
+  output_dir,
+  "IADB_sap_observed_first_pass.rds"
+)
+
+sap_reviewed_submissions_path <- file.path(
+  output_dir,
+  "IADB_sap_reviewed_submissions.rds"
+)
+
+slot_resolution_path <- file.path(
+  output_dir,
+  "IADB_03_slot_level_duplicate_resolution.csv"
+)
+
+sap_merge_checks_path <- file.path(
+  output_dir,
+  "IADB_03_sap_merge_checks.csv"
+)
+
+duplicate_reassignment_log_path <- file.path(
+  output_dir,
+  "IADB_03_duplicate_slot_reassignment_log.csv"
+)
+
+final_duplicate_slots_path <- file.path(
+  output_dir,
+  "IADB_03_final_duplicate_schedule_slots.csv"
+)
+
+required_files <- c(
+  full_audit_path,
+  sap_observed_slot_path,
+  sap_reviewed_submissions_path,
+  slot_resolution_path,
+  sap_merge_checks_path
+)
+
+missing_required <- required_files[!file.exists(required_files)]
+
+if (length(missing_required) > 0) {
+  stop(
+    "Missing required Script 03 output files:\n",
+    paste(missing_required, collapse = "\n")
+  )
+}
+
+# ------------------------------------------------------------------------------
+# Load Script 03 outputs -------------------------------------------------------
+# ------------------------------------------------------------------------------
+full_audit <- read_csv(
+  full_audit_path,
+  show_col_types = FALSE
+) |>
+  clean_names()
+
+sap_observed_slot <- readRDS(
+  sap_observed_slot_path
+) |>
+  clean_names()
+
+sap_reviewed_submissions <- readRDS(
+  sap_reviewed_submissions_path
+) |>
+  clean_names()
+
+slot_resolution <- read_csv(
+  slot_resolution_path,
+  show_col_types = FALSE
+) |>
+  clean_names()
+
+sap_merge_checks <- read_csv(
+  sap_merge_checks_path,
+  show_col_types = FALSE
+) |>
+  clean_names()
+
+duplicate_reassignment_log <- read_csv_if_exists(
+  duplicate_reassignment_log_path
+)
+
+final_duplicate_slots <- read_csv_if_exists(
+  final_duplicate_slots_path
+)
+
+# ------------------------------------------------------------------------------
+# Prepare reviewed-submissions sample ------------------------------------------
+# ------------------------------------------------------------------------------
+sap_reviewed_submissions <- sap_reviewed_submissions |>
+  add_missing_cols(c(
+    "exclude_from_slot_level_sap",
+    "unique_transaction_id",
+    "survey_instance_id",
+    "confederate_match_key",
+    "survey_transaction_id_raw",
+    "survey_transaction_id_parsed",
+    "submission_datetime",
+    "transaction_date",
+    "channel_std",
+    "amount",
+    "delivery_std",
+    "transaction_outcome_label",
+    "success",
+    "kyc_score",
+    "match_action",
+    "slot_level_resolution_action",
+    "slot_level_duplicate_rank"
+  )) |>
   mutate(
-    matched_to_schedule = as_logical_safe(matched_to_schedule),
+    exclude_from_slot_level_sap =
+      as_logical_safe(exclude_from_slot_level_sap),
     
-    submission_datetime = ymd_hms(submission_datetime, quiet = TRUE),
+    submission_datetime =
+      ymd_hms(submission_datetime, quiet = TRUE),
     
-    success = to_num(success),
-    kyc_score = to_num(kyc_score),
-    amount = to_num(amount),
-    assigned_amount = to_num(assigned_amount),
-    best_assigned_amount = to_num(best_assigned_amount),
-    reviewed_by_team_num = to_num(reviewed_by_team_num),
+    transaction_date =
+      as.Date(transaction_date),
     
-    unique_transaction_id = best_schedule_slot_id,
+    amount =
+      suppressWarnings(as.numeric(amount)),
     
-    # Full audit usually has channel_std/amount/delivery_std rather than
-    # survey_channel/survey_amount/survey_delivery. This makes the script robust.
-    survey_channel = coalesce(
-      as.character(survey_channel),
-      as.character(channel_std)
-    ),
+    success =
+      suppressWarnings(as.numeric(success)),
     
-    survey_amount = coalesce(
-      to_num(survey_amount),
-      to_num(amount)
-    ),
-    
-    survey_delivery = coalesce(
-      as.character(survey_delivery),
-      as.character(delivery_std)
-    ),
-    
-    best_channel_match = as_logical_safe(best_channel_match),
-    best_amount_match = as_logical_safe(best_amount_match),
-    best_delivery_match = as_logical_safe(best_delivery_match),
-    best_parsed_id_match = as_logical_safe(best_parsed_id_match),
-    
-    best_date_distance_assigned_num = to_num(best_date_distance_assigned),
-    best_order_distance_num = to_num(best_order_distance)
+    kyc_score =
+      suppressWarnings(as.numeric(kyc_score))
   )
 
-matched_audit <- audit |>
-  filter(matched_to_schedule, !is.na(unique_transaction_id))
+slot_resolution <- slot_resolution |>
+  add_missing_cols(c(
+    "unique_transaction_id",
+    "survey_instance_id",
+    "confederate_match_key",
+    "survey_transaction_id_raw",
+    "survey_transaction_id_parsed",
+    "submission_datetime",
+    "transaction_date",
+    "channel_std",
+    "amount",
+    "delivery_std",
+    "transaction_outcome_label",
+    "success",
+    "kyc_score",
+    "match_action",
+    "slot_level_duplicate_rank",
+    "slot_level_resolution_action"
+  )) |>
+  mutate(
+    submission_datetime =
+      ymd_hms(submission_datetime, quiet = TRUE),
+    
+    transaction_date =
+      as.Date(transaction_date),
+    
+    amount =
+      suppressWarnings(as.numeric(amount)),
+    
+    success =
+      suppressWarnings(as.numeric(success)),
+    
+    kyc_score =
+      suppressWarnings(as.numeric(kyc_score)),
+    
+    slot_level_duplicate_rank =
+      suppressWarnings(as.integer(slot_level_duplicate_rank))
+  )
 
 # ------------------------------------------------------------------------------
-# Slot-level duplicate classification ------------------------------------------
+# Strict slot-level checks ------------------------------------------------------
 # ------------------------------------------------------------------------------
-duplicate_slot_diagnostics <- matched_audit |>
+strict_slot_checks <- sap_observed_slot |>
+  summarise(
+    sample = "strict_slot_level_observed",
+    n_rows = n(),
+    n_unique_transactions = n_distinct(unique_transaction_id),
+    missing_unique_transaction_id = sum(is.na(unique_transaction_id)),
+    duplicate_transaction_rows =
+      n_rows - n_unique_transactions,
+    missing_success = sum(is.na(success)),
+    missing_kyc = sum(is.na(kyc_score))
+  )
+
+print(strict_slot_checks)
+
+if (strict_slot_checks$missing_unique_transaction_id > 0) {
+  stop("Strict slot-level observed sample has missing unique_transaction_id values.")
+}
+
+if (strict_slot_checks$duplicate_transaction_rows > 0) {
+  stop("Strict slot-level observed sample still has duplicate unique_transaction_id values.")
+}
+
+if (strict_slot_checks$missing_success > 0) {
+  stop("Strict slot-level observed sample has missing success values.")
+}
+
+if (strict_slot_checks$missing_kyc > 0) {
+  stop("Strict slot-level observed sample has missing KYC values.")
+}
+
+# ------------------------------------------------------------------------------
+# Reviewed-submissions preservation checks -------------------------------------
+# ------------------------------------------------------------------------------
+reviewed_submission_checks <- sap_reviewed_submissions |>
+  summarise(
+    sample = "reviewed_submissions",
+    n_rows = n(),
+    n_unique_transactions = n_distinct(unique_transaction_id),
+    missing_unique_transaction_id = sum(is.na(unique_transaction_id)),
+    duplicate_transaction_rows =
+      n_rows - n_unique_transactions,
+    excluded_from_slot_level_sap =
+      sum(exclude_from_slot_level_sap, na.rm = TRUE)
+  )
+
+print(reviewed_submission_checks)
+
+sample_preservation_check <- tibble(
+  item = c(
+    "strict_slot_level_observed_rows",
+    "reviewed_submissions_rows",
+    "reviewed_minus_strict_rows",
+    "reviewed_duplicate_transaction_rows",
+    "reviewed_rows_excluded_from_slot_level_sap"
+  ),
+  n = c(
+    nrow(sap_observed_slot),
+    nrow(sap_reviewed_submissions),
+    nrow(sap_reviewed_submissions) - nrow(sap_observed_slot),
+    reviewed_submission_checks$duplicate_transaction_rows,
+    reviewed_submission_checks$excluded_from_slot_level_sap
+  )
+) |>
+  mutate(
+    check_note = case_when(
+      item == "reviewed_minus_strict_rows" ~
+        "Should equal reviewed_rows_excluded_from_slot_level_sap.",
+      item == "reviewed_duplicate_transaction_rows" ~
+        "Expected in reviewed-submissions because duplicate-slot extras are preserved.",
+      TRUE ~ NA_character_
+    )
+  )
+
+print(sample_preservation_check)
+
+if (
+  reviewed_submission_checks$excluded_from_slot_level_sap !=
+  nrow(sap_reviewed_submissions) - nrow(sap_observed_slot)
+) {
+  stop(
+    "Mismatch: rows excluded from slot-level SAP do not equal reviewed-minus-strict sample difference."
+  )
+}
+
+# ------------------------------------------------------------------------------
+# Duplicate-resolution summaries -----------------------------------------------
+# ------------------------------------------------------------------------------
+slot_resolution_summary <- slot_resolution |>
+  count(slot_level_resolution_action, name = "n") |>
+  arrange(desc(n))
+
+print(slot_resolution_summary)
+
+duplicate_slot_group_summary <- sap_reviewed_submissions |>
   group_by(unique_transaction_id) |>
   summarise(
-    n_submissions_for_slot = n(),
+    n_reviewed_rows_for_slot = n(),
+    n_kept_in_slot_level =
+      sum(!exclude_from_slot_level_sap, na.rm = TRUE),
+    n_excluded_from_slot_level =
+      sum(exclude_from_slot_level_sap, na.rm = TRUE),
     
-    confederate_match_key = first(confederate_match_key),
+    confederate_match_key =
+      first(confederate_match_key),
     
-    assigned_channel = first(best_assigned_channel),
-    assigned_amount = first(best_assigned_amount),
-    assigned_delivery = first(best_assigned_delivery),
-    assigned_transaction_id = first(best_assigned_transaction_id),
-    assigned_order = first(best_assigned_order),
-    assigned_date = first(best_assigned_date),
+    survey_instances =
+      paste(unique(survey_instance_id), collapse = " | "),
     
-    n_survey_channels = n_distinct(survey_channel, na.rm = TRUE),
-    n_survey_amounts = n_distinct(survey_amount, na.rm = TRUE),
-    n_survey_deliveries = n_distinct(survey_delivery, na.rm = TRUE),
-    n_outcomes = n_distinct(transaction_outcome_label, na.rm = TRUE),
-    n_success_values = n_distinct(success, na.rm = TRUE),
-    n_kyc_values = n_distinct(kyc_score, na.rm = TRUE),
+    raw_transaction_ids =
+      paste(unique(na.omit(survey_transaction_id_raw)), collapse = " | "),
     
-    survey_channels = paste(sort(unique(na.omit(survey_channel))), collapse = " | "),
-    survey_amounts = paste(sort(unique(na.omit(as.character(survey_amount)))), collapse = " | "),
-    survey_deliveries = paste(sort(unique(na.omit(survey_delivery))), collapse = " | "),
-    outcomes = paste(sort(unique(na.omit(transaction_outcome_label))), collapse = " | "),
+    channels =
+      paste(unique(na.omit(channel_std)), collapse = " | "),
     
-    first_submission = min(submission_datetime, na.rm = TRUE),
-    last_submission = max(submission_datetime, na.rm = TRUE),
+    amounts =
+      paste(unique(na.omit(as.character(amount))), collapse = " | "),
     
-    any_reviewed = any(reviewed_by_team_num == 1, na.rm = TRUE),
+    deliveries =
+      paste(unique(na.omit(delivery_std)), collapse = " | "),
     
-    same_channel = n_survey_channels <= 1,
-    same_amount = n_survey_amounts <= 1,
-    same_delivery = n_survey_deliveries <= 1,
-    same_outcome = n_outcomes <= 1 & n_success_values <= 1,
+    outcomes =
+      paste(unique(na.omit(transaction_outcome_label)), collapse = " | "),
     
-    true_duplicate_like =
-      n_submissions_for_slot > 1 &
-      same_channel &
-      same_amount &
-      same_delivery &
-      same_outcome,
+    n_channels =
+      n_distinct(channel_std, na.rm = TRUE),
     
-    substantive_conflict =
-      n_submissions_for_slot > 1 &
-      (
-        !same_channel |
-          !same_amount |
-          !same_delivery |
-          !same_outcome
-      ),
+    n_amounts =
+      n_distinct(amount, na.rm = TRUE),
+    
+    n_deliveries =
+      n_distinct(delivery_std, na.rm = TRUE),
+    
+    n_outcomes =
+      n_distinct(transaction_outcome_label, na.rm = TRUE),
+    
+    n_success_values =
+      n_distinct(success, na.rm = TRUE),
+    
+    n_kyc_values =
+      n_distinct(kyc_score, na.rm = TRUE),
+    
+    has_channel_conflict =
+      n_channels > 1,
+    
+    has_amount_conflict =
+      n_amounts > 1,
+    
+    has_delivery_conflict =
+      n_deliveries > 1,
+    
+    has_outcome_conflict =
+      n_outcomes > 1 | n_success_values > 1,
+    
+    has_kyc_conflict =
+      n_kyc_values > 1,
+    
+    has_substantive_conflict =
+      has_channel_conflict |
+      has_amount_conflict |
+      has_delivery_conflict |
+      has_outcome_conflict,
     
     .groups = "drop"
   ) |>
-  filter(n_submissions_for_slot > 1) |>
-  arrange(desc(substantive_conflict), desc(n_submissions_for_slot))
+  filter(n_reviewed_rows_for_slot > 1) |>
+  arrange(desc(n_reviewed_rows_for_slot), unique_transaction_id)
 
-write_csv(
-  duplicate_slot_diagnostics,
-  file.path(output_dir, "IADB_04b_duplicate_slot_diagnostics.csv")
-)
+print(duplicate_slot_group_summary)
 
-# ------------------------------------------------------------------------------
-# Identifying non-selected rows in duplicate groups ----------------------------
-# ------------------------------------------------------------------------------
-duplicate_rows_ranked <- matched_audit |>
-  semi_join(
-    duplicate_slot_diagnostics |> select(unique_transaction_id),
-    by = "unique_transaction_id"
+slot_level_excluded_duplicate_rows <- sap_reviewed_submissions |>
+  filter(exclude_from_slot_level_sap) |>
+  arrange(
+    unique_transaction_id,
+    submission_datetime
   ) |>
-  mutate(
-    treatment_exact_match =
-      best_channel_match & best_amount_match & best_delivery_match,
-    
-    has_success_kyc =
-      !is.na(success) & !is.na(kyc_score),
-    
-    confidence_rank = case_when(
-      match_confidence == "high" ~ 3,
-      match_confidence == "medium" ~ 2,
-      match_confidence == "low_manual_review" ~ 1,
-      TRUE ~ 0
-    )
+  select(
+    any_of(c(
+      "unique_transaction_id",
+      "survey_instance_id",
+      "confederate_match_key",
+      "survey_transaction_id_raw",
+      "survey_transaction_id_parsed",
+      "submission_datetime",
+      "transaction_date",
+      "channel_std",
+      "amount",
+      "delivery_std",
+      "transaction_outcome_label",
+      "success",
+      "kyc_score",
+      "match_action",
+      "slot_level_duplicate_rank",
+      "slot_level_resolution_action",
+      "duplicate_recovery_status",
+      "duplicate_recovery_old_slot",
+      "duplicate_recovery_new_slot",
+      "duplicate_recovery_note",
+      "manual_note"
+    ))
+  )
+
+slot_level_kept_duplicate_rows <- sap_reviewed_submissions |>
+  filter(
+    unique_transaction_id %in%
+      duplicate_slot_group_summary$unique_transaction_id,
+    !exclude_from_slot_level_sap
   ) |>
   arrange(
     unique_transaction_id,
-    desc(replace_na(reviewed_by_team_num, 0)),
-    desc(confidence_rank),
-    desc(treatment_exact_match),
-    desc(best_parsed_id_match),
-    desc(has_success_kyc),
-    best_date_distance_assigned_num,
-    best_order_distance_num,
-    desc(submission_datetime)
+    submission_datetime
   ) |>
-  group_by(unique_transaction_id) |>
-  mutate(selected_rank_within_slot = row_number()) |>
-  ungroup() |>
-  left_join(
-    duplicate_slot_diagnostics |>
-      select(
-        unique_transaction_id,
-        true_duplicate_like,
-        substantive_conflict
-      ),
-    by = "unique_transaction_id"
-  )
-
-nonselected_duplicate_rows <- duplicate_rows_ranked |>
-  filter(selected_rank_within_slot > 1)
-
-write_csv(
-  duplicate_rows_ranked,
-  file.path(output_dir, "IADB_04b_duplicate_rows_ranked.csv")
-)
-
-write_csv(
-  nonselected_duplicate_rows,
-  file.path(output_dir, "IADB_04b_nonselected_duplicate_rows.csv")
-)
-
-# ------------------------------------------------------------------------------
-# Searching for unused candidate schedule slots for conflicted duplicate rows --
-# ------------------------------------------------------------------------------
-used_slots <- sap_observed_maximal |>
-  distinct(unique_transaction_id) |>
-  pull(unique_transaction_id)
-
-unused_schedule_slots <- sap_base_maximal |>
-  filter(!unique_transaction_id %in% used_slots) |>
   select(
-    candidate_schedule_slot_id = unique_transaction_id,
-    confederate_match_key,
-    assigned_channel,
-    assigned_amount,
-    assigned_delivery,
-    assigned_transaction_id,
-    assigned_order,
-    assigned_date,
-    sent_datetime,
-    funds_sent
-  ) |>
-  mutate(
-    assigned_amount = to_num(assigned_amount),
-    assigned_date = to_date_safe(assigned_date)
+    any_of(c(
+      "unique_transaction_id",
+      "survey_instance_id",
+      "confederate_match_key",
+      "survey_transaction_id_raw",
+      "survey_transaction_id_parsed",
+      "submission_datetime",
+      "transaction_date",
+      "channel_std",
+      "amount",
+      "delivery_std",
+      "transaction_outcome_label",
+      "success",
+      "kyc_score",
+      "match_action",
+      "slot_level_duplicate_rank",
+      "slot_level_resolution_action",
+      "duplicate_recovery_status",
+      "duplicate_recovery_old_slot",
+      "duplicate_recovery_new_slot",
+      "duplicate_recovery_note",
+      "manual_note"
+    ))
   )
 
-conflicted_nonselected <- nonselected_duplicate_rows |>
-  filter(substantive_conflict)
-
-if (nrow(conflicted_nonselected) > 0) {
-  recovery_candidates <- conflicted_nonselected |>
-    select(
-      survey_instance_id,
-      original_matched_slot = unique_transaction_id,
-      confederate_match_key,
-      submission_datetime,
-      transaction_date,
-      survey_transaction_id_raw,
-      survey_transaction_id_parsed,
-      survey_channel,
-      survey_amount,
-      survey_delivery,
-      transaction_outcome_label,
-      success,
-      kyc_score
-    ) |>
-    mutate(
-      transaction_date = to_date_safe(transaction_date),
-      survey_amount = to_num(survey_amount)
-    ) |>
-    left_join(
-      unused_schedule_slots,
-      by = "confederate_match_key",
-      relationship = "many-to-many"
-    ) |>
-    mutate(
-      channel_match = survey_channel == assigned_channel,
-      amount_match = survey_amount == assigned_amount,
-      delivery_match = survey_delivery == assigned_delivery,
-      
-      date_distance =
-        abs(as.numeric(transaction_date - assigned_date)),
-      
-      parsed_id_match =
-        !is.na(survey_transaction_id_parsed) &
-        survey_transaction_id_parsed == assigned_transaction_id,
-      
-      recovery_score =
-        100 * as.numeric(replace_na(parsed_id_match, FALSE)) +
-        70  * as.numeric(replace_na(channel_match, FALSE)) +
-        45  * as.numeric(replace_na(amount_match, FALSE)) +
-        40  * as.numeric(replace_na(delivery_match, FALSE)) -
-        2   * replace_na(date_distance, 60)
-    ) |>
-    filter(
-      channel_match | amount_match | delivery_match | parsed_id_match
-    ) |>
-    arrange(
-      survey_instance_id,
-      desc(recovery_score),
-      date_distance
+# ------------------------------------------------------------------------------
+# Recovery reassignment diagnostics --------------------------------------------
+# ------------------------------------------------------------------------------
+if (nrow(duplicate_reassignment_log) > 0) {
+  duplicate_reassignment_summary <- duplicate_reassignment_log |>
+    summarise(
+      n_reassigned_rows = n(),
+      n_old_slots = n_distinct(old_slot),
+      n_new_slots = n_distinct(new_slot),
+      parsed_id_reassignments =
+        sum(parsed_id_match, na.rm = TRUE),
+      same_treatment_cell_reassignments =
+        sum(treatment_cell_match, na.rm = TRUE),
+      median_date_distance =
+        median(date_distance, na.rm = TRUE),
+      median_order_distance =
+        median(order_distance, na.rm = TRUE)
     )
-  
-  top_recovery_candidates <- recovery_candidates |>
-    group_by(survey_instance_id) |>
-    arrange(desc(recovery_score), .by_group = TRUE) |>
-    slice_head(n = 5) |>
-    ungroup()
 } else {
-  recovery_candidates <- tibble()
-  top_recovery_candidates <- tibble()
+  duplicate_reassignment_summary <- tibble(
+    n_reassigned_rows = 0,
+    n_old_slots = 0,
+    n_new_slots = 0,
+    parsed_id_reassignments = 0,
+    same_treatment_cell_reassignments = 0,
+    median_date_distance = NA_real_,
+    median_order_distance = NA_real_
+  )
 }
 
-write_csv(
-  top_recovery_candidates,
-  file.path(output_dir, "IADB_04b_top_recovery_candidates.csv")
-)
+print(duplicate_reassignment_summary)
 
 # ------------------------------------------------------------------------------
-# Summaries --------------------------------------------------------------------
+# Final audit summary -----------------------------------------------------------
 # ------------------------------------------------------------------------------
-recovery_summary <- tibble(
+duplicate_resolution_audit_summary <- tibble(
   item = c(
-    "cleaned_surveycto_rows",
-    "matched_surveycto_rows",
-    "unique_matched_schedule_slots",
-    "duplicate_submissions_compressed",
-    "duplicate_slots_total",
-    "true_duplicate_like_slots",
-    "substantive_conflict_slots",
-    "nonselected_duplicate_rows",
-    "nonselected_true_duplicate_like_rows",
-    "nonselected_conflicted_rows",
-    "conflicted_rows_with_any_recovery_candidate",
-    "conflicted_rows_with_strong_recovery_candidate"
+    "script03_full_audit_rows",
+    "strict_slot_level_observed_rows",
+    "strict_slot_level_unique_transactions",
+    "reviewed_submissions_rows",
+    "reviewed_submissions_unique_transactions",
+    "reviewed_duplicate_extras",
+    "rows_excluded_only_from_slot_level_sap",
+    "duplicate_slot_groups_in_reviewed_submissions",
+    "duplicate_groups_with_substantive_conflict",
+    "duplicate_groups_with_kyc_conflict",
+    "script03_reassigned_duplicate_rows"
   ),
   n = c(
     nrow(full_audit),
-    nrow(matched_audit),
-    n_distinct(matched_audit$unique_transaction_id),
-    nrow(matched_audit) - n_distinct(matched_audit$unique_transaction_id),
-    nrow(duplicate_slot_diagnostics),
-    sum(duplicate_slot_diagnostics$true_duplicate_like, na.rm = TRUE),
-    sum(duplicate_slot_diagnostics$substantive_conflict, na.rm = TRUE),
-    nrow(nonselected_duplicate_rows),
-    sum(nonselected_duplicate_rows$true_duplicate_like, na.rm = TRUE),
-    sum(nonselected_duplicate_rows$substantive_conflict, na.rm = TRUE),
-    n_distinct(top_recovery_candidates$survey_instance_id),
-    n_distinct(
-      top_recovery_candidates$survey_instance_id[
-        top_recovery_candidates$recovery_score >= 140
-      ]
-    )
+    nrow(sap_observed_slot),
+    n_distinct(sap_observed_slot$unique_transaction_id),
+    nrow(sap_reviewed_submissions),
+    n_distinct(sap_reviewed_submissions$unique_transaction_id),
+    nrow(sap_reviewed_submissions) -
+      n_distinct(sap_reviewed_submissions$unique_transaction_id),
+    sum(sap_reviewed_submissions$exclude_from_slot_level_sap, na.rm = TRUE),
+    nrow(duplicate_slot_group_summary),
+    sum(duplicate_slot_group_summary$has_substantive_conflict, na.rm = TRUE),
+    sum(duplicate_slot_group_summary$has_kyc_conflict, na.rm = TRUE),
+    duplicate_reassignment_summary$n_reassigned_rows
   )
 )
 
-print(recovery_summary, n = Inf)
+print(duplicate_resolution_audit_summary, n = Inf)
+
+# ------------------------------------------------------------------------------
+# Save outputs -----------------------------------------------------------------
+# ------------------------------------------------------------------------------
+write_csv(
+  strict_slot_checks,
+  file.path(output_dir, "IADB_04b_strict_slot_level_checks.csv")
+)
 
 write_csv(
-  recovery_summary,
-  file.path(output_dir, "IADB_04b_recovery_summary.csv")
+  reviewed_submission_checks,
+  file.path(output_dir, "IADB_04b_reviewed_submission_checks.csv")
+)
+
+write_csv(
+  sample_preservation_check,
+  file.path(output_dir, "IADB_04b_sample_preservation_check.csv")
+)
+
+write_csv(
+  slot_resolution_summary,
+  file.path(output_dir, "IADB_04b_slot_resolution_summary.csv")
+)
+
+write_csv(
+  duplicate_slot_group_summary,
+  file.path(output_dir, "IADB_04b_duplicate_slot_group_summary.csv")
+)
+
+write_csv(
+  slot_level_excluded_duplicate_rows,
+  file.path(output_dir, "IADB_04b_slot_level_excluded_duplicate_rows.csv")
+)
+
+write_csv(
+  slot_level_kept_duplicate_rows,
+  file.path(output_dir, "IADB_04b_slot_level_kept_duplicate_rows.csv")
+)
+
+write_csv(
+  duplicate_reassignment_summary,
+  file.path(output_dir, "IADB_04b_duplicate_reassignment_summary.csv")
+)
+
+write_csv(
+  duplicate_resolution_audit_summary,
+  file.path(output_dir, "IADB_04b_duplicate_resolution_audit_summary.csv")
+)
+
+cat("\nScript 04b completed successfully.\n")
+cat("Strict slot-level observed rows: ", nrow(sap_observed_slot), "\n")
+cat("Reviewed-submissions rows: ", nrow(sap_reviewed_submissions), "\n")
+cat(
+  "Rows excluded only from strict slot-level SAP: ",
+  sum(sap_reviewed_submissions$exclude_from_slot_level_sap, na.rm = TRUE),
+  "\n"
 )
