@@ -1,8 +1,8 @@
 # ==============================================================================
-# IADB - 06 Cost, FX, and Time Outcomes ----------------------------------------
+# IADB - 07 Cost, FX, and Time Outcomes ----------------------------------------
 # Author: Cedric Antunes (Evaluasi) --------------------------------------------
 # Date: May 2026 ---------------------------------------------------------------
-#
+# Revisions: June, 2026
 # Purpose:
 #   1. Convert local-currency cost outcomes to USD using daily FX rates;
 #   2. Preserve reported time, transaction duration, and interaction-time outcomes;
@@ -57,6 +57,35 @@ suppressPackageStartupMessages({
 })
 
 # ------------------------------------------------------------------------------
+# Replication notes ------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Required inputs:
+#   These files must already exist from earlier scripts:
+#   - IADB_sap_observed_first_pass.rds
+#   - IADB_sap_per_protocol.rds
+#   - IADB_sap_reviewed_submissions.rds
+#   - IADB_fx_rates_daily.csv
+#
+#   Optional input:
+#   - IADB_hourly_wage_lookup.csv
+#     If this file is not available, the script uses the built-in wage lookup.
+#
+# What to change before running:
+#   - Update `output_dir` so it points to the local folder where the SAP
+#     dataset-builder outputs from Scripts 03 to 05 are stored.
+#   - Update `manual_dir` so it points to the local folder where
+#     `IADB_fx_rates_daily.csv` is stored.
+#   - `results_dir` is created automatically inside `output_dir` and stores the
+#     cost/time model outputs from this script.
+#
+# Example:
+#   output_root <- "C:/Users/YourName/Drive/IADB_outputs"
+#
+#   output_dir <- file.path(output_root, "data", "clean", "sap_dataset_builder")
+#   manual_dir <- file.path(output_root, "data", "manual")
+#   results_dir <- file.path(output_dir, "sap_results_cost_fx_time")
+
+# ------------------------------------------------------------------------------
 # Paths ------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
 output_dir <- here(
@@ -79,17 +108,17 @@ dir.create(manual_dir, showWarnings = FALSE, recursive = TRUE)
 
 sap_main_path <- file.path(
   output_dir,
-  "IADB_sap_observed_maximal_auto.rds"
+  "IADB_sap_observed_first_pass.rds"
 )
 
 sap_pp_path <- file.path(
   output_dir,
-  "IADB_sap_per_protocol_maximal_auto.rds"
+  "IADB_sap_per_protocol.rds"
 )
 
-sap_conservative_path <- file.path(
+sap_reviewed_path <- file.path(
   output_dir,
-  "IADB_sap_observed_first_pass.rds"
+  "IADB_sap_reviewed_submissions.rds"
 )
 
 fx_rates_path <- file.path(
@@ -108,7 +137,7 @@ wage_lookup_path <- file.path(
 required_input_files <- c(
   sap_main_path,
   sap_pp_path,
-  sap_conservative_path,
+  sap_reviewed_path,
   fx_rates_path
 )
 
@@ -126,7 +155,7 @@ if (length(missing_input_files) > 0) {
 # ------------------------------------------------------------------------------
 # Parameters -------------------------------------------------------------------
 # ------------------------------------------------------------------------------
-# 06a now creates a complete FX table, so missing FX should stop the script!
+# 06 now creates a complete FX table, so missing FX should stop the script!
 ALLOW_MISSING_FX <- FALSE
 
 # Extreme-value flags only. These do not automatically exclude observations.
@@ -407,13 +436,13 @@ write_csv(
 # ILOSTAT data
 default_wage_lookup <- tribble(
   ~country_clean,  ~hourly_earnings_ppp, ~hourly_wage_usd, ~wage_year, ~wage_source_note,
-  "argentina",     NA_real_,             NA_real_,         NA_real_,   "TBD: add ILOSTAT PPP hourly earnings or manual wage",
+  "argentina",     10.03,                NA_real_,         2015,       "ILOSTAT average hourly earnings of employees in PPP$",
   "brazil",         8.12,                NA_real_,         2025,       "ILOSTAT average hourly earnings of employees in PPP$",
   "chile",         12.71,                NA_real_,         2024,       "ILOSTAT average hourly earnings of employees in PPP$",
   "colombia",       6.01,                NA_real_,         2025,       "ILOSTAT average hourly earnings of employees in PPP$",
   "costa_rica",    NA_real_,             NA_real_,         NA_real_,   "TBD: add ILOSTAT PPP hourly earnings or manual wage",
   "ecuador",        7.71,                NA_real_,         2025,       "ILOSTAT average hourly earnings of employees in PPP$",
-  "el_salvador",   NA_real_,             NA_real_,         NA_real_,   "TBD: add ILOSTAT PPP hourly earnings or manual wage",
+  "el_salvador",   5.58,                 NA_real_,         NA_real_,   "ILOSTAT average hourly earnings of employees in PPP$",
   "guatemala",     NA_real_,             NA_real_,         NA_real_,   "TBD: add ILOSTAT PPP hourly earnings or manual wage",
   "jamaica",       NA_real_,             NA_real_,         NA_real_,   "TBD: add ILOSTAT PPP hourly earnings or manual wage",
   "mexico",         5.29,                NA_real_,         2025,       "ILOSTAT average hourly earnings of employees in PPP$",
@@ -475,17 +504,16 @@ sap_main <- readRDS(sap_main_path) |>
 sap_pp <- readRDS(sap_pp_path) |>
   clean_names()
 
-sap_conservative <- readRDS(sap_conservative_path) |>
+sap_reviewed <- readRDS(sap_reviewed_path) |>
   clean_names()
 
 # ------------------------------------------------------------------------------
 # 9. Determine date range needed for FX -----------------------------------------
 # ------------------------------------------------------------------------------
-
 all_sample_dates <- bind_rows(
-  extract_fx_dates(sap_main, "main"),
-  extract_fx_dates(sap_pp, "per_protocol"),
-  extract_fx_dates(sap_conservative, "conservative")
+  extract_fx_dates(sap_main, "main_strict_slot_level"),
+  extract_fx_dates(sap_pp, "per_protocol_strict_slot"),
+  extract_fx_dates(sap_reviewed, "reviewed_submissions")
 ) |>
   filter(!is.na(fx_date_candidate)) |>
   pull(fx_date_candidate)
@@ -838,30 +866,28 @@ prepare_cost_time_sample <- function(df, sample_name) {
 # ------------------------------------------------------------------------------
 sap_main_ct <- prepare_cost_time_sample(
   sap_main,
-  "main_maximal_auto"
+  "main_strict_slot_level"
 )
-
-sap_clean_ct <- sap_main_ct |>
-  filter(!needs_manual_review_for_final) |>
-  mutate(sample_name = "main_excluding_manual_review_flags")
 
 sap_pp_ct <- prepare_cost_time_sample(
   sap_pp,
-  "per_protocol_maximal_auto"
+  "per_protocol_strict_slot"
 )
 
-sap_conservative_ct <- prepare_cost_time_sample(
-  sap_conservative,
-  "conservative_firstpass"
+sap_reviewed_ct <- prepare_cost_time_sample(
+  sap_reviewed,
+  "reviewed_submissions"
 )
 
 # ------------------------------------------------------------------------------
 # Sanity/Safety checks ---------------------------------------------------------
 # ------------------------------------------------------------------------------
+# Strict slot-level samples must have one row per transaction slot.
 stopifnot(nrow(sap_main_ct) == n_distinct(sap_main_ct$unique_transaction_id))
-stopifnot(nrow(sap_clean_ct) == n_distinct(sap_clean_ct$unique_transaction_id))
 stopifnot(nrow(sap_pp_ct) == n_distinct(sap_pp_ct$unique_transaction_id))
-stopifnot(nrow(sap_conservative_ct) == n_distinct(sap_conservative_ct$unique_transaction_id))
+
+# Reviewed-submissions intentionally preserves duplicate-slot extras.
+stopifnot(nrow(sap_reviewed_ct) >= n_distinct(sap_reviewed_ct$unique_transaction_id))
 
 stopifnot(sum(is.na(sap_main_ct$assigned_channel)) == 0)
 stopifnot(sum(is.na(sap_main_ct$assigned_amount)) == 0)
@@ -907,9 +933,8 @@ diagnostic_cols <- c(
 
 cost_time_all_samples <- bind_rows(
   sap_main_ct |> select(any_of(diagnostic_cols)),
-  sap_clean_ct |> select(any_of(diagnostic_cols)),
   sap_pp_ct |> select(any_of(diagnostic_cols)),
-  sap_conservative_ct |> select(any_of(diagnostic_cols))
+  sap_reviewed_ct |> select(any_of(diagnostic_cols))
 )
 
 cost_time_sample_summary <- cost_time_all_samples |>
@@ -1120,54 +1145,44 @@ write_csv(
 # ------------------------------------------------------------------------------
 # Saving cost/time datasets ----------------------------------------------------
 # ------------------------------------------------------------------------------
+
 write_csv(
   sap_main_ct,
-  file.path(output_dir, "IADB_sap_observed_maximal_auto_cost_time.csv")
+  file.path(output_dir, "IADB_sap_observed_first_pass_cost_time.csv")
 )
 
 saveRDS(
   sap_main_ct,
-  file.path(output_dir, "IADB_sap_observed_maximal_auto_cost_time.rds")
-)
-
-write_csv(
-  sap_clean_ct,
-  file.path(output_dir, "IADB_sap_observed_clean_cost_time.csv")
-)
-
-saveRDS(
-  sap_clean_ct,
-  file.path(output_dir, "IADB_sap_observed_clean_cost_time.rds")
+  file.path(output_dir, "IADB_sap_observed_first_pass_cost_time.rds")
 )
 
 write_csv(
   sap_pp_ct,
-  file.path(output_dir, "IADB_sap_per_protocol_maximal_auto_cost_time.csv")
+  file.path(output_dir, "IADB_sap_per_protocol_cost_time.csv")
 )
 
 saveRDS(
   sap_pp_ct,
-  file.path(output_dir, "IADB_sap_per_protocol_maximal_auto_cost_time.rds")
+  file.path(output_dir, "IADB_sap_per_protocol_cost_time.rds")
 )
 
 write_csv(
-  sap_conservative_ct,
-  file.path(output_dir, "IADB_sap_observed_conservative_cost_time.csv")
+  sap_reviewed_ct,
+  file.path(output_dir, "IADB_sap_reviewed_submissions_cost_time.csv")
 )
 
 saveRDS(
-  sap_conservative_ct,
-  file.path(output_dir, "IADB_sap_observed_conservative_cost_time.rds")
+  sap_reviewed_ct,
+  file.path(output_dir, "IADB_sap_reviewed_submissions_cost_time.rds")
 )
 
 # ------------------------------------------------------------------------------
 # Model samples ----------------------------------------------------------------
 # ------------------------------------------------------------------------------
 sample_sets <- list(
-  main = sap_main_ct,
-  clean = sap_clean_ct,
-  pp = sap_pp_ct,
-  conservative = sap_conservative_ct
+  main_strict_slot_level = sap_main_ct,
+  per_protocol_strict_slot = sap_pp_ct,
+  reviewed_submissions = sap_reviewed_ct
 )
 
 cost_any_samples <- purrr::map(
