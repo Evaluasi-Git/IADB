@@ -2,6 +2,7 @@
 # IADB - 03 Build SAP Dataset --------------------------------------------------
 # Author: Cedric Antunes (EValuasi) --------------------------------------------
 # Date: May 16, 2026 -----------------------------------------------------------
+# Revisions: June, 2026
 # Purpose:
 #   1. Load cleaned SurveyCTO data;
 #   2. Load enriched randomized/payment schedule;
@@ -11,7 +12,7 @@
 #   6. Build schedule-level SAP denominator and observed-attempt SAP sample.
 #
 # Inputs:
-#   data/clean/IADB_surveycto_clean_may16.csv
+#   data/clean/IADB_surveycto_clean_june1.csv
 #   data/clean/sap_dataset_builder/IADB_payment_schedule_enriched_with_randomization.csv
 #
 # Main outputs:
@@ -39,13 +40,51 @@ suppressPackageStartupMessages({
 })
 
 # ------------------------------------------------------------------------------
+# Replication notes ------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Required inputs:
+#   - IADB_surveycto_clean_june1.csv
+#     Cleaned SurveyCTO dataset produced by Script 01.
+#
+#   - IADB_payment_schedule_enriched_with_randomization.csv
+#     Enriched randomized/payment schedule produced by Script 02.
+#
+#   - IADB_manual_schedule_match_review_completed.csv
+#     Manual schedule-match review file. Required when `SKIP_MANUAL_REVIEW <- FALSE`.
+#
+#   - IADB_confederate_crosswalk.csv
+#     Optional crosswalk file used if SurveyCTO confederate IDs and schedule names
+#     do not match.
+#
+# What to change before running:
+#   - Update `survey_path` so it points to your local copy of
+#     `IADB_surveycto_clean_june1.csv`.
+#   - Update `payment_schedule_path` so it points to your local copy of
+#     `IADB_payment_schedule_enriched_with_randomization.csv`.
+#   - Update `output_dir` so it points to the folder where Script 03 outputs
+#     should be saved.
+#   - If using manual review, make sure `manual_review_completed_path` points to
+#     `IADB_manual_schedule_match_review_completed.csv`.
+#   - If using a confederate crosswalk, update `crosswalk_path` to its local path.
+#
+# Example:
+#   output_root <- "C:/Users/YourName/Drive/IADB_outputs"
+#   input_root  <- "C:/Users/YourName/Drive/IADB_inputs"
+#
+#   survey_path <- file.path(output_root, "data", "clean", "IADB_surveycto_clean_june1.csv")
+#   payment_schedule_path <- file.path(output_root, "data", "clean", "sap_dataset_builder",
+#                                      "IADB_payment_schedule_enriched_with_randomization.csv")
+#   output_dir <- file.path(output_root, "data", "clean", "sap_dataset_builder")
+#   manual_review_completed_path <- file.path(input_root, "IADB_manual_schedule_match_review_completed.csv")
+#   crosswalk_path <- file.path(input_root, "IADB_confederate_crosswalk.csv")
+# ------------------------------------------------------------------------------
 # Paramenters ------------------------------------------------------------------
 # ------------------------------------------------------------------------------
 # For replication, tweak as needed!
 survey_path <- here(
   "data",
   "clean",
-  "IADB_surveycto_clean_may16.csv"
+  "IADB_surveycto_clean_june1.csv"
 )
 
 payment_schedule_path <- here(
@@ -223,7 +262,8 @@ extract_assigned_txid <- function(x) {
     tx_n <- NA_integer_
     
     # Standard T formats: T01, T001, T0001, T0012, T12.
-    if (str_detect(z_clean, "^t_?0*\\d{1,4}$")) {
+    # Also handles suffix variants such as T006-S, T006_S, T006S (for Laura).
+    if (str_detect(z_clean, "^t_?0*\\d{1,4}(_?s)?$")) {
       tx_n <- as.integer(str_extract(z_clean, "\\d+"))
     }
     
@@ -311,6 +351,10 @@ expected_survey_cols <- c(
   "interaction_time_hours",
   "reviewed_by_team",
   "data_quality_flag",
+  "data_quality_flag_final",
+  "flag_probable_duplicate_submission",
+  "drop_probable_duplicate",
+  "probable_duplicate_group",
   "j_comments",
   "k1_field_notes",
   "k2_red_flags",
@@ -325,6 +369,16 @@ survey_raw <- survey_raw |>
 survey <- survey_raw |>
   mutate(
     survey_row_id = row_number(),
+    
+    data_quality_flag_original = data_quality_flag,
+    
+    data_quality_flag_final = case_when(
+      !is.na(data_quality_flag_final) & data_quality_flag_final != "" ~
+        data_quality_flag_final,
+      TRUE ~ data_quality_flag
+    ),
+    
+    data_quality_flag = data_quality_flag_final,
     
     survey_instance_id = case_when(
       !is.na(instance_id) & instance_id != "" ~ instance_id,
@@ -381,7 +435,6 @@ survey <- survey_raw |>
 # Built-in crosswalk for known SurveyCTO/schedule naming discrepancies.
 # Left side = SurveyCTO cleaned confederate_id_key.
 # Right side = enriched schedule confederate_match_key.
-
 default_crosswalk <- tibble::tribble(
   ~survey_confederate_id_key,      ~schedule_confederate_id_key,
   
@@ -629,7 +682,10 @@ candidate_matches <- survey |>
     transaction_duration_hours,
     reviewed_by_team,
     reviewed_by_team_num,
-    data_quality_flag
+    data_quality_flag,
+    data_quality_flag_original,
+    data_quality_flag_final,
+    flag_probable_duplicate_submission
   ) |>
   left_join(
     payment_schedule,
@@ -908,7 +964,6 @@ manual_match_review <- survey_with_matches |>
     # "drop_true_duplicate"
     # "exclude_unresolved"
     # "keep_observed_unassigned"
-    
     corrected_schedule_slot_id = NA_character_,
     source_of_decision = NA_character_,
     manual_note = NA_character_
@@ -1042,6 +1097,229 @@ if (nrow(bad_manual_slots) > 0) {
   
   stop("Some corrected_schedule_slot_id values do not exist in the schedule. Review IADB_03_bad_manual_slot_ids.csv.")
 }
+
+# ------------------------------------------------------------------------------
+# Recover duplicate-slot matches using unused same-treatment schedule slots ------
+# ------------------------------------------------------------------------------
+# Important:
+# Repeated channel/amount/delivery combinations are expected by design.
+# Therefore, multiple SurveyCTO rows pointing to the same schedule slot should not
+# automatically be treated as duplicate submissions. Extra rows are reassigned to
+# unused schedule slots for the same confederate and treatment cell when possible.
+recover_duplicate_slot_matches <- function(survey_matched, payment_schedule) {
+  
+  eligible_schedule <- payment_schedule |>
+    select(
+      schedule_slot_id,
+      confederate_match_key,
+      assigned_transaction_id,
+      assigned_order,
+      assigned_channel,
+      assigned_amount,
+      assigned_delivery,
+      assigned_date
+    )
+  
+  # Identify rows currently eligible for SAP.
+  sm <- survey_matched |>
+    mutate(
+      duplicate_recovery_status = NA_character_,
+      duplicate_recovery_old_slot = schedule_slot_id_final,
+      duplicate_recovery_new_slot = NA_character_,
+      duplicate_recovery_note = NA_character_
+    )
+  
+  eligible_rows <- sm |>
+    filter(!exclude_from_sap, !is.na(schedule_slot_id_final))
+  
+  # Rank rows within duplicated schedule slots.
+  duplicate_ranked <- eligible_rows |>
+    group_by(schedule_slot_id_final) |>
+    mutate(
+      n_rows_current_slot = n()
+    ) |>
+    ungroup() |>
+    filter(n_rows_current_slot > 1) |>
+    arrange(
+      schedule_slot_id_final,
+      desc(match_action == "assign_different_schedule_slot"),
+      desc(best_parsed_id_match),
+      desc(reviewed_by_team_num),
+      desc(best_match_score),
+      desc(submission_datetime)
+    ) |>
+    group_by(schedule_slot_id_final) |>
+    mutate(slot_duplicate_rank = row_number()) |>
+    ungroup()
+  
+  if (nrow(duplicate_ranked) == 0) {
+    return(sm)
+  }
+  
+  # Keep the best-ranked row in each duplicated slot.
+  duplicate_keepers <- duplicate_ranked |>
+    filter(slot_duplicate_rank == 1)
+  
+  duplicate_extras <- duplicate_ranked |>
+    filter(slot_duplicate_rank > 1) |>
+    arrange(
+      confederate_match_key,
+      transaction_date,
+      submission_datetime,
+      survey_instance_id
+    )
+  
+  # Slots already occupied by non-duplicate rows plus the selected keepers.
+  occupied_slots <- eligible_rows |>
+    filter(!(survey_instance_id %in% duplicate_ranked$survey_instance_id)) |>
+    pull(schedule_slot_id_final) |>
+    c(duplicate_keepers$schedule_slot_id_final) |>
+    unique()
+  
+  reassignment_log <- list()
+  
+  for (ii in seq_len(nrow(duplicate_extras))) {
+    
+    row_i <- duplicate_extras[ii, ]
+    
+    candidate_slots <- eligible_schedule |>
+      filter(
+        confederate_match_key == row_i$confederate_match_key,
+        !(schedule_slot_id %in% occupied_slots)
+      ) |>
+      mutate(
+        parsed_id_match = case_when(
+          !is.na(row_i$survey_transaction_id_parsed) &
+            !is.na(assigned_transaction_id) &
+            row_i$survey_transaction_id_parsed == assigned_transaction_id ~ TRUE,
+          TRUE ~ FALSE
+        ),
+        
+        treatment_cell_match = case_when(
+          !is.na(row_i$channel_std) &
+            !is.na(row_i$amount) &
+            !is.na(row_i$delivery_std) &
+            row_i$channel_std == assigned_channel &
+            row_i$amount == assigned_amount &
+            row_i$delivery_std == assigned_delivery ~ TRUE,
+          TRUE ~ FALSE
+        ),
+        
+        date_distance = abs(as.numeric(row_i$transaction_date - assigned_date)),
+        
+        order_distance = abs(
+          as.numeric(row_i$survey_transaction_order_parsed) -
+            as.numeric(assigned_order)
+        ),
+        
+        plausible_recovery_match = case_when(
+          parsed_id_match ~ TRUE,
+          
+          treatment_cell_match &
+            !is.na(date_distance) &
+            date_distance <= MAX_ASSIGNED_DATE_DISTANCE_DAYS ~ TRUE,
+          
+          treatment_cell_match &
+            !is.na(order_distance) &
+            order_distance <= 10 ~ TRUE,
+          
+          TRUE ~ FALSE
+        ),
+        
+        candidate_allowed = plausible_recovery_match,
+        
+        recovery_score =
+          1000 * as.numeric(parsed_id_match) +
+          500  * as.numeric(treatment_cell_match) -
+          2    * replace_na(date_distance, 45) -
+          10   * replace_na(order_distance, 0)
+      ) |>
+      filter(candidate_allowed) |>
+      arrange(
+        desc(recovery_score),
+        date_distance,
+        order_distance
+      )
+    
+    if (nrow(candidate_slots) > 0) {
+      
+      new_slot <- candidate_slots$schedule_slot_id[[1]]
+      old_slot <- row_i$schedule_slot_id_final[[1]]
+      
+      sm <- sm |>
+        mutate(
+          schedule_slot_id_final = case_when(
+            survey_instance_id == row_i$survey_instance_id ~ new_slot,
+            TRUE ~ schedule_slot_id_final
+          ),
+          unique_transaction_id = case_when(
+            survey_instance_id == row_i$survey_instance_id ~ new_slot,
+            TRUE ~ unique_transaction_id
+          ),
+          duplicate_recovery_status = case_when(
+            survey_instance_id == row_i$survey_instance_id ~ "reassigned_to_unused_same_cell_slot",
+            TRUE ~ duplicate_recovery_status
+          ),
+          duplicate_recovery_new_slot = case_when(
+            survey_instance_id == row_i$survey_instance_id ~ new_slot,
+            TRUE ~ duplicate_recovery_new_slot
+          ),
+          duplicate_recovery_note = case_when(
+            survey_instance_id == row_i$survey_instance_id ~
+              paste0("Reassigned from duplicated slot ", old_slot,
+                     " to unused eligible slot ", new_slot),
+            TRUE ~ duplicate_recovery_note
+          )
+        )
+      
+      occupied_slots <- unique(c(occupied_slots, new_slot))
+      
+      reassignment_log[[length(reassignment_log) + 1]] <- tibble(
+        survey_instance_id = row_i$survey_instance_id,
+        old_slot = old_slot,
+        new_slot = new_slot,
+        recovery_score = candidate_slots$recovery_score[[1]],
+        parsed_id_match = candidate_slots$parsed_id_match[[1]],
+        treatment_cell_match = candidate_slots$treatment_cell_match[[1]],
+        date_distance = candidate_slots$date_distance[[1]],
+        order_distance = candidate_slots$order_distance[[1]]
+      )
+      
+    } else {
+      
+      sm <- sm |>
+        mutate(
+          duplicate_recovery_status = case_when(
+            survey_instance_id == row_i$survey_instance_id ~ "unrecovered_duplicate_slot_row",
+            TRUE ~ duplicate_recovery_status
+          ),
+          duplicate_recovery_note = case_when(
+            survey_instance_id == row_i$survey_instance_id ~
+              "No unused eligible same-confederate slot found",
+            TRUE ~ duplicate_recovery_note
+          )
+        )
+    }
+  }
+  
+  if (length(reassignment_log) > 0) {
+    reassignment_log <- bind_rows(reassignment_log)
+  } else {
+    reassignment_log <- tibble()
+  }
+  
+  write_csv(
+    reassignment_log,
+    file.path(output_dir, "IADB_03_duplicate_slot_reassignment_log.csv")
+  )
+  
+  sm
+}
+
+survey_matched <- recover_duplicate_slot_matches(
+  survey_matched = survey_matched,
+  payment_schedule = payment_schedule
+)
 
 # ------------------------------------------------------------------------------
 # Attaching final schedule variables -------------------------------------------
@@ -1191,25 +1469,111 @@ if (nrow(conflicting_slots) > 0 && SKIP_MANUAL_REVIEW) {
     )
 }
 
-if (nrow(conflicting_slots) > 0 && !SKIP_MANUAL_REVIEW) {
-  stop(
-    "Conflicting duplicate schedule slots remain. Review IADB_03_final_duplicate_schedule_slots.csv."
+# If duplicate slots remain after manual review and recovery, keep all rows for
+# the reviewed-submissions sensitivity sample, but exclude extra rows from the
+# strict slot-level SAP sample using a transparent deterministic rule.
+slot_level_duplicate_resolution <- survey_matched |>
+  filter(!exclude_from_sap, !is.na(unique_transaction_id)) |>
+  group_by(unique_transaction_id) |>
+  mutate(
+    n_rows_current_slot_final = n()
+  ) |>
+  ungroup() |>
+  filter(n_rows_current_slot_final > 1) |>
+  arrange(
+    unique_transaction_id,
+    desc(match_action == "assign_different_schedule_slot"),
+    desc(best_parsed_id_match),
+    desc(reviewed_by_team_num),
+    desc(best_match_score),
+    desc(submission_datetime)
+  ) |>
+  group_by(unique_transaction_id) |>
+  mutate(
+    slot_level_duplicate_rank = row_number(),
+    slot_level_resolution_action = case_when(
+      slot_level_duplicate_rank == 1 ~ "keep_in_slot_level_sample",
+      TRUE ~ "exclude_from_slot_level_sample_keep_in_reviewed_submissions"
+    )
+  ) |>
+  ungroup()
+
+write_csv(
+  slot_level_duplicate_resolution,
+  file.path(output_dir, "IADB_03_slot_level_duplicate_resolution.csv")
+)
+
+survey_matched <- survey_matched |>
+  left_join(
+    slot_level_duplicate_resolution |>
+      select(
+        survey_instance_id,
+        n_rows_current_slot_final,
+        slot_level_duplicate_rank,
+        slot_level_resolution_action
+      ),
+    by = "survey_instance_id"
+  ) |>
+  mutate(
+    n_rows_current_slot_final = replace_na(n_rows_current_slot_final, 1L),
+    slot_level_duplicate_rank = replace_na(slot_level_duplicate_rank, 1L),
+    slot_level_resolution_action = replace_na(
+      slot_level_resolution_action,
+      "not_duplicate_slot"
+    ),
+    exclude_from_slot_level_sap =
+      slot_level_resolution_action ==
+      "exclude_from_slot_level_sample_keep_in_reviewed_submissions"
+  )
+
+if (nrow(final_duplicate_slots) > 0) {
+  warning(
+    "Duplicate schedule slots remain after recovery. ",
+    "Extra rows were flagged in IADB_03_slot_level_duplicate_resolution.csv ",
+    "and excluded only from the strict slot-level SAP sample. ",
+    "They remain available in IADB_sap_reviewed_submissions."
   )
 }
 
 # ------------------------------------------------------------------------------
-# Deduplicating true resubmissions ---------------------------------------------
+# Final slot-level SAP sample ---------------------------------------------------
 # ------------------------------------------------------------------------------
+# At this stage, duplicate schedule slots should have already been resolved by
+# manual review or duplicate-slot recovery. We no longer silently keep only one row.
 survey_dedup <- survey_matched |>
-  filter(!exclude_from_sap, !is.na(unique_transaction_id)) |>
-  arrange(
-    unique_transaction_id,
-    desc(reviewed_by_team_num),
-    desc(submission_datetime)
-  ) |>
-  group_by(unique_transaction_id) |>
-  slice(1) |>
-  ungroup()
+  filter(
+    !exclude_from_sap,
+    !exclude_from_slot_level_sap,
+    !is.na(unique_transaction_id)
+  )
+
+remaining_duplicate_slots <- survey_dedup |>
+  count(unique_transaction_id, name = "n_rows") |>
+  filter(n_rows > 1)
+
+if (nrow(remaining_duplicate_slots) > 0) {
+  
+  remaining_duplicate_rows <- survey_dedup |>
+    semi_join(
+      remaining_duplicate_slots,
+      by = "unique_transaction_id"
+    ) |>
+    arrange(
+      unique_transaction_id,
+      submission_datetime
+    )
+  
+  write_csv(
+    remaining_duplicate_rows,
+    file.path(output_dir, "IADB_03_remaining_duplicate_slot_rows_AFTER_RECOVERY.csv")
+  )
+  
+  stop(
+    "Duplicate schedule-slot assignments remain after recovery. ",
+    "Review IADB_03_remaining_duplicate_slot_rows_AFTER_RECOVERY.csv. ",
+    "Do not silently deduplicate these rows."
+  )
+}
 
 dedup_checks <- survey_dedup |>
   summarise(
@@ -1284,6 +1648,10 @@ survey_dedup_for_join <- survey_dedup |>
       "match_action",
       "source_of_decision",
       "manual_note",
+      "data_quality_flag_original",
+      "data_quality_flag_final",
+      "flag_probable_duplicate_submission",
+      "probable_duplicate_group",
       
       "treatment_adherent",
       "channel_adherent",
@@ -1522,7 +1890,18 @@ bad_survey_completion_review <- sap_base |>
   filter(
     attempted,
     is.na(data_quality_flag) |
-      data_quality_flag != "OK" |
+      data_quality_flag %in% c(
+        "No consent",
+        "Missing critical ID",
+        "Missing treatment or success outcome",
+        "Duplicate instance ID",
+        "Protocol/coding inconsistency",
+        "Invalid negative value",
+        "Completed but not confirmed received",
+        "Outcome missingness",
+        "Late scorecard",
+        "Missing wage lookup"
+      ) |
       is.na(success) |
       is.na(kyc_score) |
       (success == 1 & is.na(cost_local)) |
@@ -1549,6 +1928,10 @@ bad_survey_completion_review <- sap_base |>
     time_hours,
     transaction_duration_hours,
     data_quality_flag,
+    data_quality_flag_original,
+    data_quality_flag_final,
+    flag_probable_duplicate_submission,
+    probable_duplicate_group,
     survey_transaction_id_raw,
     submission_datetime,
     transaction_date,
@@ -1574,6 +1957,41 @@ write_csv(
 # ------------------------------------------------------------------------------
 sap_observed <- sap_base |>
   filter(attempted)
+
+# ------------------------------------------------------------------------------
+# Reviewed-submissions sensitivity sample ---------------------------------------
+# ------------------------------------------------------------------------------
+# This sample keeps all non-excluded SurveyCTO submissions with a final schedule
+# assignment before slot-level compression. It is useful as a sample-preservation
+# sensitivity sample.
+sap_reviewed_submissions <- survey_matched |>
+  filter(!exclude_from_sap, !is.na(unique_transaction_id)) |>
+  mutate(
+    country = coalesce(country_clean, country_schedule_clean),
+    
+    exclude_from_slot_level_sap = replace_na(exclude_from_slot_level_sap, FALSE),
+    
+    MTO = as.numeric(assigned_channel == "MTOs"),
+    Fintech = as.numeric(assigned_channel == "Fintech"),
+    Crypto = as.numeric(assigned_channel == "Crypto"),
+    Amount250 = as.numeric(assigned_amount == 250),
+    Online = as.numeric(assigned_delivery == "Online"),
+    
+    observed_MTO = as.numeric(channel_std == "MTOs"),
+    observed_Fintech = as.numeric(channel_std == "Fintech"),
+    observed_Crypto = as.numeric(channel_std == "Crypto"),
+    observed_Amount250 = as.numeric(amount == 250),
+    observed_Online = as.numeric(delivery_std == "Online"),
+    
+    sample_success = !is.na(success),
+    sample_kyc = !is.na(kyc_score),
+    sample_cost_local = success == 1 & !is.na(cost_local),
+    sample_time = success == 1 & !is.na(time_hours),
+    sample_transaction_duration = !is.na(transaction_duration_hours),
+    sample_per_protocol = treatment_adherent,
+    sample_attempted_after_funding =
+      execution_status_attempt == "attempted_after_funding"
+  )
 
 sap_attempted_after_funding <- sap_base |>
   filter(execution_status == "attempted_after_funding")
@@ -1671,6 +2089,16 @@ write_csv(
 saveRDS(
   sap_per_protocol,
   file.path(output_dir, "IADB_sap_per_protocol.rds")
+)
+
+write_csv(
+  sap_reviewed_submissions,
+  file.path(output_dir, "IADB_sap_reviewed_submissions.csv")
+)
+
+saveRDS(
+  sap_reviewed_submissions,
+  file.path(output_dir, "IADB_sap_reviewed_submissions.rds")
 )
 
 cat("\nSaved SAP dataset outputs to:\n")
