@@ -37,6 +37,33 @@ suppressPackageStartupMessages({
 })
 
 # ------------------------------------------------------------------------------
+# Replication notes ------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Required inputs:
+#   Optional SAP files used to infer the FX date range, if available:
+#   - IADB_sap_observed_maximal_auto.rds
+#   - IADB_sap_per_protocol_maximal_auto.rds
+#   - IADB_sap_observed_first_pass.rds
+#
+#   External source:
+#   - FRED_API_KEY, optional. If no FRED key is available, the script uses the
+#     public currency API fallback for exchange rates.
+#
+# What to change before running:
+#   - Update `manual_dir` so it points to the local folder where the FX outputs
+#     should be saved.
+#   - Update `sap_output_dir` so it points to the local folder where the SAP
+#     dataset-builder outputs from earlier scripts are stored.
+#   - If using FRED, set a valid FRED API key in your local `.Renviron` as
+#     `FRED_API_KEY=your_key_here`. Do not hard-code a personal key in the script.
+#
+# Example:
+#   output_root <- "C:/Users/YourName/Drive/IADB_outputs"
+#
+#   manual_dir <- file.path(output_root, "data", "manual")
+#   sap_output_dir <- file.path(output_root, "data", "clean", "sap_dataset_builder")
+
+# ------------------------------------------------------------------------------
 # Paths ------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
 manual_dir <- here("data", "manual")
@@ -260,9 +287,6 @@ fred_fx_raw <- pmap_dfr(
 # Public no-key API fallback ---------------------------------------------------
 # ------------------------------------------------------------------------------
 # This uses the open fawazahmed0 exchange/currency API endpoints as a fallback.
-# It is useful for broad currency coverage when FRED or central-bank feeds are
-# unavailable. The project provides currency exchange data through jsDelivr and
-# a pages.dev fallback endpoint. :contentReference[oaicite:1]{index=1}
 api_currencies <- setdiff(
   needed_currencies,
   "USD"
@@ -369,7 +393,6 @@ public_fx_raw <- map_dfr(
 # Important fix:
 #   We first drop rows with missing rates, then select the first available source.
 #   This guarantees that fx_source corresponds to the actual non-missing rate used.
-
 fx_available <- bind_rows(
   usd_fx |>
     mutate(source_priority = 1),
@@ -473,7 +496,7 @@ cat("\n=== FX source counts ===\n")
 print(fx_source_counts, n = Inf)
 
 # ------------------------------------------------------------------------------
-# 10. Save outputs --------------------------------------------------------------
+# Save outputs -----------------------------------------------------------------
 # ------------------------------------------------------------------------------
 write_csv(
   fx_daily,
