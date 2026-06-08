@@ -4,6 +4,8 @@ This folder contains the core R pipeline for the IADB KYC/AML audit study. The s
 
 The scripts should be run sequentially. Each script contains a short replication note at the top indicating the required inputs and the local paths that need to be changed before replication.
 
+Step-by-step for replication and input files [here]([https://www.example.com](https://docs.google.com/document/d/1FQVRKk3eEwpFQXLxNnyRj6ZZsv77kPWTAf45P81lSb8/edit?usp=sharing))
+
 ## Replication workflow
 
 The repository contains the R scripts. Sensitive input files should be stored separately and should not be committed to GitHub if they contain confidential or identifiable information.
