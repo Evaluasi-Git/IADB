@@ -2,6 +2,7 @@
 # IADB - Raw SurveyCTO data cleaning -------------------------------------------
 # Author: Cedric Antunes (Evaluasi)
 # Date: May 11, 2026
+# Revisions: June, 2026
 # Minor revisions implemented on June 1st
 # Objectives:
 #   1. Clean raw SurveyCTO data
@@ -26,6 +27,23 @@ suppressPackageStartupMessages({
   library(stringr)
   library(here)
 })
+
+# ------------------------------------------------------------------------------
+# Replication notes ------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Required input:
+#   - IADB_Survey_WIDE_june1.csv
+#     Raw SurveyCTO export used as the input for this cleaning script.
+#
+# What to change before running:
+#   - Update `raw_path` so it points to the local location of
+#     `IADB_Survey_WIDE_june1.csv` on your computer.
+#   - Update `output_dir` so it points to the folder where you want the cleaned
+#     outputs from this script to be saved.
+#
+# Example:
+#   raw_path <- "C:/Users/YourName/Drive/IADB_inputs/IADB_Survey_WIDE_june1.csv"
+#   output_dir <- "C:/Users/YourName/Drive/IADB_outputs/data/clean"
 
 # ------------------------------------------------------------------------------
 # Paths ------------------------------------------------------------------------
