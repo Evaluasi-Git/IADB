@@ -1,12 +1,13 @@
 # ==============================================================================
-# IADB - Run SAP Models --------------------------------------------------------
+# IADB - 05 Run SAP Models -----------------------------------------------------
 # Author: Cedric Antunes (Evaluasi) --------------------------------------------
-# Date: May 18, 2026 -----------------------------------------------------------
+# Revised: June 2026 -----------------------------------------------------------
+# Rvisions: June, 2026
 # Purpose:
-#   1. Run main first-pass SAP models using maximal-auto matched sample.
-#   2. Run sensitivity models excluding manual-review-flagged observations.
-#   3. Run per-protocol robustness.
-#   4. Run conservative-sample robustness.
+#   1. Run main SAP success/KYC models on the strict slot-level sample;
+#   2. Run attempted-after-funding sensitivity models;
+#   3. Run per-protocol sensitivity models;
+#   4. Run reviewed-submissions sensitivity models.
 # ==============================================================================
 
 # Cleaning my environment 
@@ -24,32 +25,58 @@ suppressPackageStartupMessages({
 })
 
 # ------------------------------------------------------------------------------
+# Replication notes ------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Required inputs:
+#   These files must already exist from Script 03:
+#   - IADB_sap_observed_first_pass.rds
+#   - IADB_sap_attempted_after_funding.rds
+#   - IADB_sap_per_protocol.rds
+#   - IADB_sap_reviewed_submissions.rds
+#
+# What to change before running:
+#   - Update `output_dir` so it points to the local folder where Script 03 saved
+#     the SAP dataset-builder outputs.
+#   - `results_dir` is created automatically inside `output_dir` and stores the
+#     model tables and diagnostics produced by this script.
+#
+# Example:
+#   output_dir <- "C:/Users/YourName/Drive/IADB_outputs/data/clean/sap_dataset_builder"
+#   results_dir <- file.path(output_dir, "sap_results_maximal_auto")
+
+# ------------------------------------------------------------------------------
 # Paths ------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
-# Output directory
 output_dir <- "D:/Evaluasi/data/clean/sap_dataset_builder"
 
 results_dir <- file.path(output_dir, "sap_results_maximal_auto")
 
-dir.create(results_dir, 
-           showWarnings = FALSE, 
-           recursive = TRUE)
+dir.create(
+  results_dir,
+  showWarnings = FALSE,
+  recursive = TRUE
+)
 
 # ------------------------------------------------------------------------------
-# Loading samples --------------------------------------------------------------
+# Loading authoritative Script 03 samples --------------------------------------
 # ------------------------------------------------------------------------------
 sap_main <- readRDS(
-  file.path(output_dir, "IADB_sap_observed_maximal_auto.rds")
+  file.path(output_dir, "IADB_sap_observed_first_pass.rds")
+) |>
+  clean_names()
+
+sap_after_funding <- readRDS(
+  file.path(output_dir, "IADB_sap_attempted_after_funding.rds")
 ) |>
   clean_names()
 
 sap_pp <- readRDS(
-  file.path(output_dir, "IADB_sap_per_protocol_maximal_auto.rds")
+  file.path(output_dir, "IADB_sap_per_protocol.rds")
 ) |>
   clean_names()
 
-sap_conservative <- readRDS(
-  file.path(output_dir, "IADB_sap_observed_first_pass.rds")
+sap_reviewed <- readRDS(
+  file.path(output_dir, "IADB_sap_reviewed_submissions.rds")
 ) |>
   clean_names()
 
@@ -66,7 +93,7 @@ as_logical_safe <- function(x) {
   )
 }
 
-# Safe missing cols 
+# Safe missing columns
 add_missing_cols <- function(df, cols) {
   missing_cols <- setdiff(cols, names(df))
   
@@ -79,32 +106,47 @@ add_missing_cols <- function(df, cols) {
   df
 }
 
-# Preparing models
+# df analysis
 prep_sap_model <- function(df) {
   df |>
     add_missing_cols(c(
-      "needs_manual_review_for_final",
-      "protocol_deviation",
+      "unique_transaction_id",
+      "confederate_match_key",
+      "success",
+      "kyc_score",
+      "assigned_channel",
+      "assigned_amount",
+      "assigned_delivery",
       "channel_std",
       "amount",
       "delivery_std",
-      "country"
+      "country",
+      "country_clean",
+      "country_schedule_clean",
+      "treatment_adherent",
+      "exclude_from_slot_level_sap"
     )) |>
     mutate(
-      success = as.numeric(success),
-      kyc_score = as.numeric(kyc_score),
+      success = suppressWarnings(as.numeric(success)),
+      kyc_score = suppressWarnings(as.numeric(kyc_score)),
       
-      assigned_channel = factor(
-        assigned_channel,
-        levels = c("Banks", "MTOs", "Fintech", "Crypto")
+      assigned_channel = as.character(assigned_channel),
+      assigned_delivery = as.character(assigned_delivery),
+      assigned_amount = suppressWarnings(as.numeric(assigned_amount)),
+      
+      channel_std = as.character(channel_std),
+      delivery_std = as.character(delivery_std),
+      amount = suppressWarnings(as.numeric(amount)),
+      
+      country = coalesce(
+        as.character(country),
+        as.character(country_clean),
+        as.character(country_schedule_clean)
       ),
       
-      assigned_delivery = factor(
-        assigned_delivery,
-        levels = c("In-person", "Online")
-      ),
-      
-      assigned_amount = as.numeric(assigned_amount),
+      treatment_adherent = as_logical_safe(treatment_adherent),
+      exclude_from_slot_level_sap =
+        as_logical_safe(exclude_from_slot_level_sap),
       
       MTO = as.numeric(assigned_channel == "MTOs"),
       Fintech = as.numeric(assigned_channel == "Fintech"),
@@ -115,66 +157,98 @@ prep_sap_model <- function(df) {
       observed_MTO = as.numeric(channel_std == "MTOs"),
       observed_Fintech = as.numeric(channel_std == "Fintech"),
       observed_Crypto = as.numeric(channel_std == "Crypto"),
-      observed_Amount250 = as.numeric(as.numeric(amount) == 250),
-      observed_Online = as.numeric(delivery_std == "Online"),
-      
-      needs_manual_review_for_final =
-        as_logical_safe(needs_manual_review_for_final),
-      
-      protocol_deviation =
-        as_logical_safe(protocol_deviation)
+      observed_Amount250 = as.numeric(amount == 250),
+      observed_Online = as.numeric(delivery_std == "Online")
     )
 }
 
+# Empirical specifications with confederate FEs
+safe_feols <- function(formula, data, vcov = ~ confederate_match_key) {
+  outcome_name <- all.vars(formula)[1]
+  y <- data[[outcome_name]]
+  
+  if (length(unique(na.omit(y))) <= 1) {
+    message("Skipping model because outcome is constant: ", outcome_name)
+    return(NULL)
+  }
+  
+  tryCatch(
+    feols(
+      formula,
+      data = data,
+      vcov = vcov
+    ),
+    error = function(e) {
+      message("Skipping model because estimation failed: ", outcome_name)
+      message(e$message)
+      return(NULL)
+    }
+  )
+}
+
+# ------------------------------------------------------------------------------
+# Preparing samples ------------------------------------------------------------
+# ------------------------------------------------------------------------------
 sap_main_m <- prep_sap_model(sap_main)
-
-sap_clean_m <- sap_main_m |>
-  filter(!needs_manual_review_for_final)
-
+sap_after_funding_m <- prep_sap_model(sap_after_funding)
 sap_pp_m <- prep_sap_model(sap_pp)
-
-sap_conservative_m <- prep_sap_model(sap_conservative)
+sap_reviewed_m <- prep_sap_model(sap_reviewed)
 
 # ------------------------------------------------------------------------------
 # Sample diagnostics -----------------------------------------------------------
 # ------------------------------------------------------------------------------
-sample_summary <- tibble(
-  sample = c(
-    "main_maximal_auto",
-    "main_excluding_manual_review_flags",
-    "per_protocol_maximal_auto",
-    "conservative_firstpass"
-  ),
-  n = c(
-    nrow(sap_main_m),
-    nrow(sap_clean_m),
-    nrow(sap_pp_m),
-    nrow(sap_conservative_m)
-  ),
-  n_confederates = c(
-    n_distinct(sap_main_m$confederate_match_key),
-    n_distinct(sap_clean_m$confederate_match_key),
-    n_distinct(sap_pp_m$confederate_match_key),
-    n_distinct(sap_conservative_m$confederate_match_key)
-  ),
-  n_countries = c(
-    n_distinct(sap_main_m$country),
-    n_distinct(sap_clean_m$country),
-    n_distinct(sap_pp_m$country),
-    n_distinct(sap_conservative_m$country)
-  ),
-  mean_success = c(
-    mean(sap_main_m$success, na.rm = TRUE),
-    mean(sap_clean_m$success, na.rm = TRUE),
-    mean(sap_pp_m$success, na.rm = TRUE),
-    mean(sap_conservative_m$success, na.rm = TRUE)
-  ),
-  mean_kyc = c(
-    mean(sap_main_m$kyc_score, na.rm = TRUE),
-    mean(sap_clean_m$kyc_score, na.rm = TRUE),
-    mean(sap_pp_m$kyc_score, na.rm = TRUE),
-    mean(sap_conservative_m$kyc_score, na.rm = TRUE)
-  )
+sample_summary <- bind_rows(
+  sap_main_m |>
+    summarise(
+      sample = "main_strict_slot_level",
+      n = n(),
+      n_unique_transactions = n_distinct(unique_transaction_id),
+      duplicate_transaction_rows = n - n_unique_transactions,
+      n_confederates = n_distinct(confederate_match_key),
+      n_countries = n_distinct(country),
+      mean_success = mean(success, na.rm = TRUE),
+      mean_kyc = mean(kyc_score, na.rm = TRUE),
+      excluded_from_slot_level_sap = sum(exclude_from_slot_level_sap, na.rm = TRUE)
+    ),
+  
+  sap_after_funding_m |>
+    summarise(
+      sample = "attempted_after_funding",
+      n = n(),
+      n_unique_transactions = n_distinct(unique_transaction_id),
+      duplicate_transaction_rows = n - n_unique_transactions,
+      n_confederates = n_distinct(confederate_match_key),
+      n_countries = n_distinct(country),
+      mean_success = mean(success, na.rm = TRUE),
+      mean_kyc = mean(kyc_score, na.rm = TRUE),
+      excluded_from_slot_level_sap = sum(exclude_from_slot_level_sap, na.rm = TRUE)
+    ),
+  
+  sap_pp_m |>
+    summarise(
+      sample = "per_protocol_strict_slot_level",
+      n = n(),
+      n_unique_transactions = n_distinct(unique_transaction_id),
+      duplicate_transaction_rows = n - n_unique_transactions,
+      n_confederates = n_distinct(confederate_match_key),
+      n_countries = n_distinct(country),
+      mean_success = mean(success, na.rm = TRUE),
+      mean_kyc = mean(kyc_score, na.rm = TRUE),
+      excluded_from_slot_level_sap = sum(exclude_from_slot_level_sap, na.rm = TRUE)
+    ),
+  
+  sap_reviewed_m |>
+    summarise(
+      sample = "reviewed_submissions_preserved",
+      n = n(),
+      n_unique_transactions = n_distinct(unique_transaction_id),
+      duplicate_transaction_rows = n - n_unique_transactions,
+      n_confederates = n_distinct(confederate_match_key),
+      n_countries = n_distinct(country),
+      mean_success = mean(success, na.rm = TRUE),
+      mean_kyc = mean(kyc_score, na.rm = TRUE),
+      excluded_from_slot_level_sap = sum(exclude_from_slot_level_sap, na.rm = TRUE)
+    )
 )
 
 main_by_channel <- sap_main_m |>
@@ -185,8 +259,7 @@ main_by_channel <- sap_main_m |>
     success_mean = mean(success, na.rm = TRUE),
     kyc_mean = mean(kyc_score, na.rm = TRUE),
     kyc_sd = sd(kyc_score, na.rm = TRUE),
-    manual_review_flagged = sum(needs_manual_review_for_final, na.rm = TRUE),
-    protocol_deviations = sum(protocol_deviation, na.rm = TRUE),
+    protocol_deviations = sum(!treatment_adherent, na.rm = TRUE),
     .groups = "drop"
   )
 
@@ -203,30 +276,11 @@ write_csv(
 cat("\n=== Sample summary ===\n")
 print(sample_summary)
 
-cat("\n=== Main sample by assigned channel ===\n")
+cat("\n=== Main strict slot-level sample by assigned channel ===\n")
 print(main_by_channel)
 
 # ------------------------------------------------------------------------------
-# Safe FEOLS -------------------------------------------------------------------
-# ------------------------------------------------------------------------------
-safe_feols <- function(formula, data, vcov = ~ confederate_match_key) {
-  outcome_name <- all.vars(formula)[1]
-  y <- data[[outcome_name]]
-  
-  if (length(unique(na.omit(y))) <= 1) {
-    message("Skipping model because outcome is constant: ", outcome_name)
-    return(NULL)
-  }
-  
-  feols(
-    formula,
-    data = data,
-    vcov = vcov
-  )
-}
-
-# ------------------------------------------------------------------------------
-# Main models: maximal-auto sample ---------------------------------------------
+# Main models: strict slot-level sample -----------------------------------------
 # ------------------------------------------------------------------------------
 m_success_main <- safe_feols(
   success ~ MTO + Fintech + Crypto + Amount250 + Online | confederate_match_key,
@@ -239,20 +293,20 @@ m_kyc_main <- safe_feols(
 )
 
 # ------------------------------------------------------------------------------
-# Sensitivity: exclude manual-review-flagged rows ------------------------------
+# Sensitivity: attempted after funding ------------------------------------------
 # ------------------------------------------------------------------------------
-m_success_clean <- safe_feols(
+m_success_after_funding <- safe_feols(
   success ~ MTO + Fintech + Crypto + Amount250 + Online | confederate_match_key,
-  data = sap_clean_m
+  data = sap_after_funding_m
 )
 
-m_kyc_clean <- safe_feols(
+m_kyc_after_funding <- safe_feols(
   kyc_score ~ MTO + Fintech + Crypto + Amount250 + Online | confederate_match_key,
-  data = sap_clean_m
+  data = sap_after_funding_m
 )
 
 # ------------------------------------------------------------------------------
-# Sensitivity: per-protocol ----------------------------------------------------
+# Sensitivity: per-protocol -----------------------------------------------------
 # ------------------------------------------------------------------------------
 m_success_pp <- safe_feols(
   success ~ MTO + Fintech + Crypto + Amount250 + Online | confederate_match_key,
@@ -265,16 +319,16 @@ m_kyc_pp <- safe_feols(
 )
 
 # ------------------------------------------------------------------------------
-# Sensitivity: conservative 155-row sample -------------------------------------
+# Sensitivity: reviewed submissions --------------------------------------------
 # ------------------------------------------------------------------------------
-m_success_conservative <- safe_feols(
+m_success_reviewed <- safe_feols(
   success ~ MTO + Fintech + Crypto + Amount250 + Online | confederate_match_key,
-  data = sap_conservative_m
+  data = sap_reviewed_m
 )
 
-m_kyc_conservative <- safe_feols(
+m_kyc_reviewed <- safe_feols(
   kyc_score ~ MTO + Fintech + Crypto + Amount250 + Online | confederate_match_key,
-  data = sap_conservative_m
+  data = sap_reviewed_m
 )
 
 # ------------------------------------------------------------------------------
@@ -282,13 +336,14 @@ m_kyc_conservative <- safe_feols(
 # ------------------------------------------------------------------------------
 model_list <- list(
   m_success_main = m_success_main,
-  m_success_clean = m_success_clean,
+  m_success_after_funding = m_success_after_funding,
   m_success_pp = m_success_pp,
-  m_success_conservative = m_success_conservative,
+  m_success_reviewed = m_success_reviewed,
+  
   m_kyc_main = m_kyc_main,
-  m_kyc_clean = m_kyc_clean,
+  m_kyc_after_funding = m_kyc_after_funding,
   m_kyc_pp = m_kyc_pp,
-  m_kyc_conservative = m_kyc_conservative
+  m_kyc_reviewed = m_kyc_reviewed
 )
 
 model_list_nonnull <- model_list[
@@ -305,6 +360,7 @@ write_csv(
   file.path(results_dir, "sap_models_skipped.csv")
 )
 
+# All models in one table.
 do.call(
   etable,
   c(
@@ -323,6 +379,70 @@ do.call(
     list(
       tex = TRUE,
       file = file.path(results_dir, "sap_success_kyc_main_and_sensitivity.tex")
+    )
+  )
+)
+
+# Success-only table.
+success_models <- model_list_nonnull[
+  names(model_list_nonnull) %in% c(
+    "m_success_main",
+    "m_success_after_funding",
+    "m_success_pp",
+    "m_success_reviewed"
+  )
+]
+
+do.call(
+  etable,
+  c(
+    success_models,
+    list(
+      tex = FALSE,
+      file = file.path(results_dir, "sap_success_models.txt")
+    )
+  )
+)
+
+do.call(
+  etable,
+  c(
+    success_models,
+    list(
+      tex = TRUE,
+      file = file.path(results_dir, "sap_success_models.tex")
+    )
+  )
+)
+
+# KYC-only table.
+kyc_models <- model_list_nonnull[
+  names(model_list_nonnull) %in% c(
+    "m_kyc_main",
+    "m_kyc_after_funding",
+    "m_kyc_pp",
+    "m_kyc_reviewed"
+  )
+]
+
+do.call(
+  etable,
+  c(
+    kyc_models,
+    list(
+      tex = FALSE,
+      file = file.path(results_dir, "sap_kyc_models.txt")
+    )
+  )
+)
+
+do.call(
+  etable,
+  c(
+    kyc_models,
+    list(
+      tex = TRUE,
+      file = file.path(results_dir, "sap_kyc_models.tex")
     )
   )
 )
