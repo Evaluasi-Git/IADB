@@ -2,6 +2,7 @@
 # IADB - Build Enriched Payment/Randomization Schedule -------------------------
 # Author: Cedric Antunes (Evaluasi)
 # Date: May 11, 2026
+# Most recent data added on June 1st
 # Purpose:
 #   1. Load individual randomized transaction schedules;
 #   2. Stack and standardize them;
@@ -32,29 +33,75 @@ suppressPackageStartupMessages({
 })
 
 # ------------------------------------------------------------------------------
+# Replication notes ------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Required inputs:
+#   - [IADB] - Internal Payment Tracking - Payment Schedule_june1.csv
+#     Internal payment-tracking file.
+#
+#   - master_schedule_feb13.csv
+#   - master_schedule_feb26.csv
+#   - master_schedule_mar12.csv
+#   - master_schedule_mar30_may15.csv
+#   - master_schedule_apr24_may25.csv
+#   - master_schedule_supplemental_may21_may31.csv
+#   - master_schedule_supplemental_may22_may31.csv
+#     Randomized transaction schedules.
+#
+# What to change before running:
+#   - Update `payment_tracking_path` so it points to the local location of the
+#     internal payment-tracking CSV on your computer.
+#   - Update all paths listed in `randomized_schedule_files` so they point to the
+#     local locations of the randomized schedule CSVs on your computer.
+#   - Update `output_dir` so it points to the folder where you want the enriched
+#     schedule outputs from this script to be saved.
+#
+# Example:
+#   input_root  <- "C:/Users/YourName/Drive/IADB_inputs"
+#   output_root <- "C:/Users/YourName/Drive/IADB_outputs"
+#
+#   payment_tracking_path <- file.path(
+#     input_root,
+#     "[IADB] - Internal Payment Tracking - Payment Schedule_june1.csv"
+#   )
+#
+#   output_dir <- file.path(output_root, "data", "clean", "sap_dataset_builder")
+#
+#   randomized_schedule_files <- c(
+#     file.path(input_root, "master_schedule_feb13.csv"),
+#     file.path(input_root, "master_schedule_feb26.csv"),
+#     file.path(input_root, "master_schedule_mar12.csv"),
+#     file.path(input_root, "master_schedule_mar30_may15.csv"),
+#     file.path(input_root, "master_schedule_apr24_may25.csv"),
+#     file.path(input_root, "master_schedule_supplemental_may21_may31.csv"),
+#     file.path(input_root, "master_schedule_supplemental_may22_may31.csv")
+#   )
+# ------------------------------------------------------------------------------
 # Paths ------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
 # Payment tracking (Cedric and Kathery access only)
 payment_tracking_path <- here(
   "data",
   "raw",
-  "[IADB] - Internal Payment Tracking - Payment Schedule.csv"
+  "[IADB] - Internal Payment Tracking - Payment Schedule_june1.csv"
 )
 
 # Output
 output_dir <- here("data", "clean", "sap_dataset_builder")
 
 # Create outcome directory (uncomment if needed)
-#dir.create(output_dir, 
-#           showWarnings = FALSE, 
-#           recursive = TRUE)
+dir.create(output_dir, 
+           showWarnings = FALSE, 
+           recursive = TRUE)
 
 randomized_schedule_files <- c(
   here("IADB", "data", "randomization", "master_schedule_feb13.csv"),
   here("IADB", "data", "randomization", "master_schedule_feb26.csv"),
   here("IADB", "data", "randomization", "master_schedule_mar12.csv"),
   here("IADB", "data", "randomization", "master_schedule_mar30_may15.csv"),
-  here("IADB", "data", "randomization", "master_schedule_apr24_may25.csv")
+  here("IADB", "data", "randomization", "master_schedule_apr24_may25.csv"),
+  here("IADB", "data", "randomization", "supplemental_may21_may31", "master_schedule_supplemental_may21_may31.csv"),
+  here("IADB", "data", "randomization", "supplemental_may22_may31", "master_schedule_supplemental_may22_may31.csv")
 )
 
 # ------------------------------------------------------------------------------
